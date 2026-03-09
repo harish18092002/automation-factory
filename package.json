@@ -7,8 +7,8 @@
     "node": ">=20.0.0"
   },
   "scripts": {
-    "dev": "ts-node --esm bot/index.ts",
-    "dev:watch": "ts-node-dev --respawn --transpile-only bot/index.ts",
+    "dev": "tsx bot/index.ts",
+    "dev:watch": "tsx watch bot/index.ts",
     "build": "tsc",
     "start": "node dist/bot/index.js",
     "typecheck": "tsc --noEmit"
@@ -20,8 +20,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "ts-node": "^10.9.1",
-    "ts-node-dev": "^2.0.0",
+    "tsx": "^4.21.0",
     "typescript": "^5.7.3"
   }
 }

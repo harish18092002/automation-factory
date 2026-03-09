@@ -44,6 +44,7 @@ cp .env.example .env
 ```
 
 Edit `.env`:
+
 ```
 ANTHROPIC_API_KEY=sk-ant-...
 SLACK_BOT_TOKEN=xoxb-...
@@ -91,6 +92,7 @@ npm run dev
 ```
 
 You should see:
+
 ```
 ⚡ Claude Agent Bot is running (Socket Mode)
 📦 Registered repos: services, terminal, swells
@@ -122,6 +124,7 @@ into a separate validateOrder() function in the utils folder
 ```
 
 The bot will:
+
 1. Parse the intent (repo, service, task type)
 2. Show you what it understood before starting
 3. Stream live tool-call updates into the Slack thread
@@ -138,6 +141,7 @@ the direct GitLab "Create MR" URL.
 ## Git Workflow (Auto)
 
 After the agent finishes, the bot:
+
 1. Creates branch: `agent/<service>-<description>-<timestamp>`
 2. `git add -A && git commit`
 3. `git push origin <branch>`
@@ -152,16 +156,16 @@ You review and merge manually via git.surfboard.se.
 These values were not found in any `.env.example` or environment file during the scan.
 Fill them in your `AGENT_CONTEXT.md` files before using the bot on those services.
 
-| Placeholder | Where | What to fill |
-|---|---|---|
-| `<<CONFIRM: Redis host/port constructor args in services repo>>` | `agent/repos.config.json` + `surfboard-surfpay/AGENT_CONTEXT.md` | Actual env keys used to pass Redis host/port to `RedisStorage` constructor |
-| `<<CONFIRM: DATABASE_URL for Prisma in services>>` | `surfboard-surfpay/AGENT_CONTEXT.md` | Prisma DB connection env key for Prisma-using services |
-| `<<CONFIRM: DATABASE_URL for Prisma in terminal>>` | `auth-gateway/AGENT_CONTEXT.md` | Prisma DB connection env key (check `prisma/` schema for `datasource`) |
-| `<<CONFIRM: service ports in services repo>>` | `surfboard-surfpay/AGENT_CONTEXT.md` | Port for each of the 103 services — check `apps/<service>/src/main.ts` |
-| `<<CONFIRM: service ports in terminal repo>>` | `auth-gateway/AGENT_CONTEXT.md` | Port for each of the 16 services — check `apps/<service>/src/environments/environment.ts` |
-| `<<CONFIRM: service ports in swells repo>>` | `swells/AGENT_CONTEXT.md` | Port for each service — check `apps/<service>/src/environment.ts` |
-| `<<CONFIRM: test script in swells>>` | `agent/repos.config.json` | Swells has no `test` script in package.json — add one or remove from config |
-| `<<CONFIRM: swells/apps/app purpose>>` | `swells/AGENT_CONTEXT.md` | What does `apps/app/` do? Read its `src/index.ts` |
+| Placeholder                                                      | Where                                                            | What to fill                                                                              |
+| ---------------------------------------------------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `<<CONFIRM: Redis host/port constructor args in services repo>>` | `agent/repos.config.json` + `surfboard-surfpay/AGENT_CONTEXT.md` | Actual env keys used to pass Redis host/port to `RedisStorage` constructor                |
+| `<<CONFIRM: DATABASE_URL for Prisma in services>>`               | `surfboard-surfpay/AGENT_CONTEXT.md`                             | Prisma DB connection env key for Prisma-using services                                    |
+| `<<CONFIRM: DATABASE_URL for Prisma in terminal>>`               | `auth-gateway/AGENT_CONTEXT.md`                                  | Prisma DB connection env key (check `prisma/` schema for `datasource`)                    |
+| `<<CONFIRM: service ports in services repo>>`                    | `surfboard-surfpay/AGENT_CONTEXT.md`                             | Port for each of the 103 services — check `apps/<service>/src/main.ts`                    |
+| `<<CONFIRM: service ports in terminal repo>>`                    | `auth-gateway/AGENT_CONTEXT.md`                                  | Port for each of the 16 services — check `apps/<service>/src/environments/environment.ts` |
+| `<<CONFIRM: service ports in swells repo>>`                      | `swells/AGENT_CONTEXT.md`                                        | Port for each service — check `apps/<service>/src/environment.ts`                         |
+| `<<CONFIRM: test script in swells>>`                             | `agent/repos.config.json`                                        | Swells has no `test` script in package.json — add one or remove from config               |
+| `<<CONFIRM: swells/apps/app purpose>>`                           | `swells/AGENT_CONTEXT.md`                                        | What does `apps/app/` do? Read its `src/index.ts`                                         |
 
 ---
 
