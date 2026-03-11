@@ -1,0 +1,27 @@
+{
+  "name": "surfboard-claude-agent",
+  "version": "1.0.0",
+  "description": "Slack-based Claude AI agent for Surfboard engineering repos",
+  "private": true,
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "dev": "ts-node --esm bot/index.ts",
+    "dev:watch": "ts-node-dev --respawn --transpile-only bot/index.ts",
+    "build": "tsc",
+    "start": "node dist/bot/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.52.0",
+    "@slack/bolt": "^4.4.0",
+    "dotenv": "^16.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "ts-node": "^10.9.1",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.7.3"
+  }
+}
