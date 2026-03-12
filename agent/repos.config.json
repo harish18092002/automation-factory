@@ -2,6 +2,7 @@
   "repos": {
     "services": {
       "path": "/Users/harishanantharaj/Downloads/surfboard/Surfboardproject/surfboard-surfpay",
+      "description": "Core NestJS/Nx monorepo — payments, KYC, merchants, analytics, 103 microservices",
       "contextMd": "./AGENT_CONTEXT.md",
       "type": "nestjs-microservices",
       "runtime": "node",
@@ -197,6 +198,7 @@
     },
     "terminal": {
       "path": "/Users/harishanantharaj/Downloads/surfboard/Surfboardproject/auth-gateway",
+      "description": "PCI-scoped Fastify/Nx monorepo — card-present acquiring, HSM, Fiserv/Nets/Bambora, 16 services",
       "contextMd": "./AGENT_CONTEXT.md",
       "type": "fastify-microservices",
       "runtime": "node",
@@ -263,6 +265,7 @@
     },
     "swells": {
       "path": "/Users/harishanantharaj/Downloads/surfboard/Surfboardproject/swells",
+      "description": "Next-gen Bun/Elysia monorepo — Redis-first payment infrastructure, Slipstream pub-sub, 10 services",
       "contextMd": "./AGENT_CONTEXT.md",
       "type": "bun-elysia-microservices",
       "runtime": "bun",
