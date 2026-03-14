@@ -1,7 +1,7 @@
 {
   "name": "surfboard-claude-agent",
-  "version": "1.0.0",
-  "description": "Slack-based Claude AI agent for Surfboard engineering repos",
+  "version": "2.0.0",
+  "description": "Agentic Factory — multi-provider AI agent for Surfboard engineering repos",
   "private": true,
   "engines": {
     "node": ">=20.0.0"
@@ -14,9 +14,12 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.52.0",
+    "openai": "^4.100.0",
     "@slack/bolt": "^4.4.0",
-    "dotenv": "^16.5.0"
+    "dotenv": "^16.5.0",
+    "p-limit": "^6.2.0",
+    "simple-git": "^3.27.0",
+    "zod": "^3.24.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

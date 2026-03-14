@@ -1,1 +1,6 @@
 node_modules/
+dist/
+.env
+
+# Runtime memory/data — never commit (contains episodic logs, skills, facts)
+data/
