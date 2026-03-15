@@ -248,7 +248,10 @@
         "utils",
         "xml-acquiring"
       ],
-      "sharedLibScopes": ["@terminal", "@agw"],
+      "sharedLibScopes": [
+        "@terminal",
+        "@agw"
+      ],
       "envFile": ".env",
       "redisEnvKey": "REDIS_HOST",
       "redisPortKey": "REDIS_PORT",
@@ -320,6 +323,23 @@
       "buildScript": "bun ./scripts/build/build.ts",
       "lintScript": "bun ./scripts/check/lint.ts",
       "testScript": "<<CONFIRM: no test script found in package.json>>"
+    },
+    "fairShare": {
+      "path": "/Users/harishanantharaj/Desktop/coding/fairShare",
+      "contextMd": "./AGENT_CONTEXT.md",
+      "type": "node-unknown-monorepo",
+      "runtime": "node",
+      "buildSystem": "npm",
+      "srcDir": "src",
+      "services": [],
+      "sharedLibs": [],
+      "sharedLibScope": "@fairShare",
+      "envFile": ".env",
+      "gitRemote": "<<CONFIRM: git remote for fairShare>>",
+      "buildScript": "npm run build",
+      "lintScript": "npm run lint",
+      "testScript": "npm test",
+      "description": "fairShare (fairShare) — node unknown monorepo with 0 services"
     }
   }
 }
