@@ -47,7 +47,7 @@ export const readOnlyToolDefinitions: ProviderTool[] = [
       parameters: {
         type: 'object',
         properties: {
-          repo: { type: 'string', description: 'Repo alias (e.g. services, terminal, swells, or any registered alias)' },
+          repo: { type: 'string', description: 'Repo alias as registered (e.g. my-api, my-frontend, or any alias from repos.config.json)' },
           relative_path: { type: 'string', description: 'File path relative to repo root (e.g. "apps/gateway/src/main.ts")' },
         },
         required: ['repo', 'relative_path'],

@@ -1,6 +1,14 @@
 node_modules/
 dist/
 .env
+.env.local
+
+# User-specific repo registry — generated at runtime by /add-dir or register commands
+# Copy agent/repos.config.example.json to agent/repos.config.json and fill in your paths
+agent/repos.config.json
+
+# Claude Code local settings — personal permission allow-lists, not for sharing
+.claude/settings.local.json
 
 # Runtime memory/data — never commit (contains episodic logs, skills, facts)
 data/

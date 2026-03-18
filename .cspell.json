@@ -33,6 +33,7 @@
     "dedup",
     "ANALYSE",
     "SUMMARISE",
-    "Tavily"
+    "Tavily",
+    "mpim"
   ]
 }

@@ -89,9 +89,9 @@ interface ParsedIntent {
 
 // ── Direct alias matcher ───────────────────────────────────────────────────
 // Check if a repo alias appears verbatim in the message (word boundary match).
-// This handles "in terminal", "terminal repo", "the swells project", etc.
+// This handles "in my-api", "my-api repo", "the my-frontend project", etc.
 // We do this BEFORE any LLM call because LLMs can confuse repo aliases with
-// same-named services (e.g. "terminal" alias vs "terminal-admin" service in services repo).
+// same-named services (e.g. "auth" alias vs "auth-service" service name).
 function findDirectAlias(message: string, aliases: string[]): string | null {
   for (const alias of aliases) {
     // Escape special regex chars in alias, then match as a whole word
@@ -388,10 +388,10 @@ app.message(async ({ message, say, client: slackClient }: any) => {
         `*Available repos:* \`${aliases.join("`, `")}\``,
         "",
         "*Example requests:*",
-        "• _\"In the services repo, add a health endpoint to merchant-service\"_",
-        "• _\"What does payment-isolate do in swells?\"_",
-        "• _\"Fix the null-check bug in terminal datecs-acquiring\"_",
-        "• _\"register project myapp at /path/to/myapp\"_",
+        "• _\"In the my-api repo, add a GET /health endpoint to user-service\"_",
+        "• _\"What does auth-service do in my-api?\"_",
+        "• _\"Fix the null-check bug in my-api payment-service\"_",
+        "• _\"/add-dir /path/to/your/repo\"_",
       ].join("\n"),
       thread_ts: threadTs,
     });
@@ -757,7 +757,7 @@ app.action("cancel_task", async ({ body, ack, client: slackClient }: any) => {
   console.log("📡 Git: Phase 3 will add auto-branch + MR generation");
   console.log("");
   console.log("📖 Usage:");
-  console.log('  Ask questions: "What does payment-isolate do in swells?"');
-  console.log('  Implement:     "Add a health endpoint to ocean-server in swells"');
-  console.log('  Register:      "register project myapp at /path/to/repo"');
+  console.log('  Ask questions: "What does auth-service do in my-api?"');
+  console.log('  Implement:     "Add a health endpoint to user-service in my-api"');
+  console.log('  Register:      "/add-dir /path/to/repo"');
 })();

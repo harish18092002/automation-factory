@@ -1,0 +1,45 @@
+{
+  "repos": {
+    "my-api": {
+      "path": "/path/to/your/repo",
+      "description": "Brief description of this repo",
+      "contextMd": "./AGENT_CONTEXT.md",
+      "type": "nestjs-microservices",
+      "runtime": "node",
+      "buildSystem": "nx",
+      "srcDir": "apps",
+      "services": [
+        "auth-service",
+        "user-service",
+        "payment-service"
+      ],
+      "sharedLibs": [
+        "common-utils",
+        "logger",
+        "interfaces"
+      ],
+      "sharedLibScope": "@my-org",
+      "envFile": ".env",
+      "gitRemote": "git@github.com:your-org/your-repo.git",
+      "buildScript": "nx build",
+      "lintScript": "nx lint",
+      "testScript": "nx test"
+    },
+    "my-frontend": {
+      "path": "/path/to/another/repo",
+      "description": "Frontend app — Next.js",
+      "contextMd": "./AGENT_CONTEXT.md",
+      "type": "nextjs",
+      "runtime": "node",
+      "buildSystem": "npm",
+      "srcDir": "src",
+      "services": [],
+      "sharedLibs": [],
+      "envFile": ".env.local",
+      "gitRemote": "git@github.com:your-org/frontend.git",
+      "buildScript": "npm run build",
+      "lintScript": "npm run lint",
+      "testScript": "npm test"
+    }
+  }
+}

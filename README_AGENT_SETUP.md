@@ -1,22 +1,23 @@
-# Claude Agent Bot — Setup Guide
+# automation-factories — Setup Guide
 
-Slack-based AI coding agent powered by the Anthropic Claude API.
-Reads and writes code across the three Surfboard engineering repos.
+Slack-based AI coding agent that autonomously handles engineering tasks across multiple repos.
+Supports multi-provider LLM routing (DeepSeek, Gemini, Groq, Claude CLI).
 
 ---
 
 ## Prerequisites
 
-- Node.js >= 20 (or use `nvm use 24`)
+- Node.js >= 20
 - A Slack workspace where you have admin rights
-- An Anthropic API key
+- At least one of: Anthropic API key, DeepSeek API key, Groq API key, Gemini API key
+  (or just `CLAUDE_CLI` mode if you have Claude Code installed)
 
 ---
 
 ## Step 1 — Create the Slack App
 
 1. Go to https://api.slack.com/apps → **Create New App** → **From Scratch**
-2. Name it `Claude Agent` (or anything you like), select your workspace
+2. Name it `automation-factories` (or anything you like), select your workspace
 3. In the left sidebar → **Socket Mode** → enable it
    - Generate an **App-Level Token** with scope `connections:write`
    - Copy the token (starts with `xapp-`) → this is `SLACK_APP_TOKEN`
@@ -31,7 +32,10 @@ Reads and writes code across the three Surfboard engineering repos.
 5. In the left sidebar → **Event Subscriptions** → enable it
    - Under **Subscribe to bot events**, add: `message.channels`, `message.im`, `message.groups`
 
-6. In the left sidebar → **Install App** → **Install to Workspace** → Authorize
+6. In the left sidebar → **Interactive Components** → enable it
+   - (Required for Approve / Cancel / Add Context buttons)
+
+7. In the left sidebar → **Install App** → **Install to Workspace** → Authorize
    - Copy the **Bot User OAuth Token** (starts with `xoxb-`) → this is `SLACK_BOT_TOKEN`
 
 ---
@@ -39,17 +43,30 @@ Reads and writes code across the three Surfboard engineering repos.
 ## Step 2 — Configure Environment
 
 ```bash
-cd /Users/harishanantharaj/Desktop/coding/automation
+cd /path/to/automation-factories
 cp .env.example .env
 ```
 
-Edit `.env`:
+Edit `.env` with your keys:
 
-```
-ANTHROPIC_API_KEY=sk-ant-...
+```env
+# Slack (required)
 SLACK_BOT_TOKEN=xoxb-...
 SLACK_APP_TOKEN=xapp-...
+
+# LLM providers — set IS_PERSONAL=yes to use these, or leave unset to use Claude CLI only
+IS_PERSONAL=yes
+ANTHROPIC_API_KEY=sk-ant-...
+DEEPSEEK_API_KEY=sk-...
+GROQ_API_KEY=gsk_...
+GEMINI_API_KEY=AIza...
+
+# Optional: web search for research tasks
+TAVILY_API_KEY=tvly-...
 ```
+
+If `IS_PERSONAL=no` (or unset), the bot routes all tasks through Claude CLI (your local
+Claude Code installation). No API keys required — uses your Claude subscription.
 
 ---
 
@@ -61,27 +78,32 @@ npm install
 
 ---
 
-## Step 4 — Place AGENT_CONTEXT.md in Each Repo
+## Step 4 — Register Your Repos
 
-The agent reads `AGENT_CONTEXT.md` from the root of each repo at runtime.
-Open `agent/AGENT_CONTEXT_TEMPLATE.md` and copy the relevant block to each repo:
+The bot needs to know about your repos before it can work on them. There are two ways:
 
-```bash
-# For surfboard-surfpay (alias: services)
-# Copy the block under "FOR REPO: services" into:
-/Users/harishanantharaj/Downloads/surfboard/Surfboardproject/surfboard-surfpay/AGENT_CONTEXT.md
+### Option A — Auto-register via Slack (recommended)
 
-# For auth-gateway (alias: terminal)
-# Copy the block under "FOR REPO: terminal" into:
-/Users/harishanantharaj/Downloads/surfboard/Surfboardproject/auth-gateway/AGENT_CONTEXT.md
+Send this message to the bot in Slack:
 
-# For swells (alias: swells)
-# Copy the block under "FOR REPO: swells" into:
-/Users/harishanantharaj/Downloads/surfboard/Surfboardproject/swells/AGENT_CONTEXT.md
+```
+/add-dir /path/to/your/repo
 ```
 
-Review each file for `<<CONFIRM: ...>>` placeholders (listed at the bottom of this guide)
-and fill them in with the correct values before running the bot.
+The bot will:
+1. Detect the project type (NestJS, Next.js, Express, Bun, etc.)
+2. Scan services and shared libs
+3. Generate an `AGENT_CONTEXT.md` in the repo root
+4. Register it with an auto-derived alias
+
+### Option B — Manual registration
+
+```
+register project my-api at /path/to/your/repo
+```
+
+Then create `AGENT_CONTEXT.md` manually using the template at
+`agent/AGENT_CONTEXT_TEMPLATE.md`. Copy it to your repo root and fill in all sections.
 
 ---
 
@@ -94,94 +116,90 @@ npm run dev
 You should see:
 
 ```
-⚡ Claude Agent Bot is running (Socket Mode)
-📦 Registered repos: services, terminal, swells
-🤖 Model: claude-sonnet-4-20250514
-📡 Git host: git.surfboard.se (GitLab — PRs must be opened manually)
+⚡ automation-factories bot is running (Socket Mode)
+📦 Registered repos: my-api, my-frontend
 ```
 
-Invite the bot to a Slack channel: `/invite @Claude Agent`
+Invite the bot to a Slack channel: `/invite @automation-factories`
 
 ---
 
 ## Step 6 — Using the Bot
 
-Send a message in any channel where the bot is present:
+Send messages in any channel where the bot is present:
 
 ```
-In the services repo, add a new GET /health endpoint to the merchant-service
+In the my-api repo, add a new GET /health endpoint to the user-service
 that returns { status: "ok", timestamp: <ISO date> }
 ```
 
 ```
-Fix the null-check bug in terminal repo datecs-acquiring — the
-transaction ID can be undefined when the terminal disconnects mid-flow
+Fix the null-check bug in my-api auth-service — the token can be
+undefined when the session expires mid-request
 ```
 
 ```
-Refactor swells payment-isolate to extract the order validation logic
-into a separate validateOrder() function in the utils folder
+Refactor my-api payment-service to extract the validation logic
+into a separate validatePayload() function
 ```
 
 The bot will:
 
 1. Parse the intent (repo, service, task type)
-2. Show you what it understood before starting
+2. Show what it understood — confirm before executing
 3. Stream live tool-call updates into the Slack thread
-4. Write the code and run the build to verify
-5. Commit the changes and push a branch to git.surfboard.se
-6. Post the GitLab merge request URL for you to open
-
-**Note on PRs**: The repos use GitLab at `git.surfboard.se`, not GitHub.
-The `gh` CLI does not work here. The bot will push the branch and give you
-the direct GitLab "Create MR" URL.
+4. Research → Plan → show Approve / Add Context / Cancel buttons
+5. On approval: write the code, run build to verify, commit, push a branch
+6. Post the PR/MR URL
 
 ---
 
 ## Git Workflow (Auto)
 
-After the agent finishes, the bot:
+After the agent finishes implementing:
 
-1. Creates branch: `agent/<service>-<description>-<timestamp>`
+1. Creates branch: `agent/<service>-<short-description>-<timestamp>`
 2. `git add -A && git commit`
 3. `git push origin <branch>`
-4. Posts the GitLab MR creation URL
-
-You review and merge manually via git.surfboard.se.
-
----
-
-## <<CONFIRM>> Placeholders to Resolve
-
-These values were not found in any `.env.example` or environment file during the scan.
-Fill them in your `AGENT_CONTEXT.md` files before using the bot on those services.
-
-| Placeholder                                                      | Where                                                            | What to fill                                                                              |
-| ---------------------------------------------------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `<<CONFIRM: Redis host/port constructor args in services repo>>` | `agent/repos.config.json` + `surfboard-surfpay/AGENT_CONTEXT.md` | Actual env keys used to pass Redis host/port to `RedisStorage` constructor                |
-| `<<CONFIRM: DATABASE_URL for Prisma in services>>`               | `surfboard-surfpay/AGENT_CONTEXT.md`                             | Prisma DB connection env key for Prisma-using services                                    |
-| `<<CONFIRM: DATABASE_URL for Prisma in terminal>>`               | `auth-gateway/AGENT_CONTEXT.md`                                  | Prisma DB connection env key (check `prisma/` schema for `datasource`)                    |
-| `<<CONFIRM: service ports in services repo>>`                    | `surfboard-surfpay/AGENT_CONTEXT.md`                             | Port for each of the 103 services — check `apps/<service>/src/main.ts`                    |
-| `<<CONFIRM: service ports in terminal repo>>`                    | `auth-gateway/AGENT_CONTEXT.md`                                  | Port for each of the 16 services — check `apps/<service>/src/environments/environment.ts` |
-| `<<CONFIRM: service ports in swells repo>>`                      | `swells/AGENT_CONTEXT.md`                                        | Port for each service — check `apps/<service>/src/environment.ts`                         |
-| `<<CONFIRM: test script in swells>>`                             | `agent/repos.config.json`                                        | Swells has no `test` script in package.json — add one or remove from config               |
-| `<<CONFIRM: swells/apps/app purpose>>`                           | `swells/AGENT_CONTEXT.md`                                        | What does `apps/app/` do? Read its `src/index.ts`                                         |
+4. Posts the PR/MR creation URL in Slack
 
 ---
 
 ## Project Structure
 
 ```
-automation/
+automation-factories/
 ├── agent/
-│   ├── repos.config.json          # All repo metadata (paths, services, libs)
-│   ├── AGENT_CONTEXT_TEMPLATE.md  # Template — copy blocks to each repo root
-│   ├── tools.ts                   # Claude tool definitions + executor
-│   └── loop.ts                    # Claude agentic loop (multi-turn)
+│   ├── repos.config.json          # Your repo registry (gitignored — personal)
+│   ├── repos.config.example.json  # Template — copy and edit to create yours
+│   ├── AGENT_CONTEXT_TEMPLATE.md  # Template for writing AGENT_CONTEXT.md per repo
+│   ├── config.ts                  # Config loader + repo registry API
+│   ├── loop.ts                    # Multi-turn agent loop
+│   ├── tools.ts                   # Tool definitions + executor
+│   ├── classifier.ts              # Intent classifier (question/research/implement)
+│   ├── providers/                 # LLM providers (Claude, DeepSeek, Gemini, Groq)
+│   ├── memory/                    # Episodic + semantic + skill memory
+│   └── learning/                  # Post-session pattern extraction
 ├── bot/
 │   └── index.ts                   # Slack bot (Socket Mode, @slack/bolt)
+├── data/                          # Runtime data (gitignored)
+│   ├── episodic/                  # Session logs (JSONL)
+│   ├── semantic/                  # Learned facts per repo (JSON)
+│   └── skills/                    # Learned patterns per repo (JSON)
+├── .env.example                   # Environment variable template
 ├── package.json
-├── tsconfig.json
-├── .env.example
-└── README_AGENT_SETUP.md          # This file
+└── tsconfig.json
 ```
+
+---
+
+## Provider Routing
+
+| Condition | Provider Used |
+|---|---|
+| `IS_PERSONAL=no` or unset | Claude CLI (your subscription) |
+| Quick question/routing | Groq `llama-3.1-8b-instant` (ultra-fast) |
+| Research / implement | DeepSeek `deepseek-chat` |
+| DeepSeek unavailable | Groq `llama-3.3-70b-versatile` |
+| Context > 80K tokens | Gemini `gemini-2.0-flash` |
+| All API providers fail | Claude CLI fallback |
