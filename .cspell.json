@@ -21,6 +21,18 @@
     "typeorm",
     "tsconfig",
     "lockb",
-    "claude"
+    "claude",
+    "datecs",
+    "myapp",
+    "xoxb",
+    "xapp",
+    "TAVILY",
+    "tvly",
+    "myalias",
+    "DEDUP",
+    "dedup",
+    "ANALYSE",
+    "SUMMARISE",
+    "Tavily"
   ]
 }

@@ -1,6 +1,10 @@
 import fs from "fs/promises";
 import path from "path";
+import { exec } from "child_process";
+import { promisify } from "util";
 import type { RepoEntry } from "./config.js";
+
+const execAsync = promisify(exec);
 
 async function safeRead(p: string): Promise<string | null> {
   try {
@@ -21,7 +25,10 @@ async function listDirs(dirPath: string): Promise<string[]> {
       )
       .map((e) => e.name)
       .sort();
-  } catch {
+  } catch (err) {
+    // Intentionally silent for non-existent optional directories (libs/, apps/, etc.)
+    // but log a warning so issues are visible in logs
+    console.warn(`[${new Date().toISOString()}] listDirs: could not read "${dirPath}":`, String(err));
     return [];
   }
 }
@@ -113,6 +120,16 @@ export async function detectProject(
   const services = await listDirs(path.join(absPath, srcDir));
   const sharedLibs = await listDirs(path.join(absPath, "libs"));
 
+  // Attempt to read git remote URL before falling back to placeholder
+  let gitRemote = `<<CONFIRM: git remote for ${alias}>>`;
+  try {
+    const { stdout: remoteOut } = await execAsync("git remote get-url origin", { cwd: absPath, timeout: 5_000 });
+    const remoteUrl = remoteOut.trim();
+    if (remoteUrl) gitRemote = remoteUrl;
+  } catch {
+    // No git repo or no origin remote — keep placeholder
+  }
+
   const configEntry: RepoEntry = {
     path: absPath,
     contextMd: "./AGENT_CONTEXT.md",
@@ -124,7 +141,7 @@ export async function detectProject(
     sharedLibs,
     sharedLibScope,
     envFile: ".env",
-    gitRemote: `<<CONFIRM: git remote for ${alias}>>`,
+    gitRemote,
     buildScript,
     lintScript,
     testScript,

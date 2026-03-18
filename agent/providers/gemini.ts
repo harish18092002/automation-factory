@@ -13,6 +13,22 @@ import { normalizeOpenAIResponse } from './deepseek.js';
  * OpenAI-compatible endpoint via Google AI. Best for large codebase tasks (1M context).
  * Cost: $0.30/M input, $2.50/M output. Free tier: 1,500 req/day, 15 RPM.
  */
+
+/**
+ * Sanitize tool definitions for Gemini's OpenAI-compat endpoint.
+ * Strips any non-standard fields that Gemini does not support to avoid API errors.
+ */
+function sanitizeToolsForGemini(tools: ProviderTool[]): OpenAI.ChatCompletionTool[] {
+  return tools.map((tool) => ({
+    type: 'function' as const,
+    function: {
+      name: tool.function.name,
+      description: tool.function.description,
+      parameters: tool.function.parameters,
+    },
+  }));
+}
+
 export class GeminiProvider implements Provider {
   readonly providerName = 'gemini';
   private client: OpenAI;
@@ -38,13 +54,15 @@ export class GeminiProvider implements Provider {
       ...(messages as OpenAI.ChatCompletionMessageParam[]),
     ];
 
+    const sanitizedTools = tools.length > 0 ? sanitizeToolsForGemini(tools) : undefined;
+
     const res = await this.client.chat.completions.create({
       model: process.env.GEMINI_MODEL ?? 'gemini-2.0-flash',
       max_tokens: options.maxTokens,
       temperature: options.temperature ?? 0,
       messages: fullMessages,
-      tools: tools.length > 0 ? (tools as OpenAI.ChatCompletionTool[]) : undefined,
-      tool_choice: tools.length > 0 ? 'auto' : undefined,
+      tools: sanitizedTools,
+      tool_choice: sanitizedTools ? 'auto' : undefined,
     });
 
     return normalizeOpenAIResponse(res, this.providerName);

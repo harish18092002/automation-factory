@@ -67,24 +67,40 @@ export class EpisodicStore {
   ): Promise<EpisodicEvent[]> {
     const limit = options.limit ?? 20;
     const file = logFile(repoAlias);
+    const MAX_READ_BYTES = 10 * 1024; // read at most last 10KB to avoid large JSONL scans
 
+    // For large log files, only read the tail to keep memory usage bounded
+    let content: string;
     try {
-      const content = await fs.readFile(file, 'utf-8');
-      const lines = content.split('\n').filter(Boolean);
-      // Read from the end to get most recent
-      const events: EpisodicEvent[] = [];
-      for (let i = lines.length - 1; i >= 0 && events.length < limit; i--) {
+      const stat = await fs.stat(file);
+      if (stat.size > MAX_READ_BYTES) {
+        // Read only the last 10KB — may truncate the first line (first line is skipped during parse)
+        const fh = await fs.open(file, 'r');
         try {
-          const e = JSON.parse(lines[i]) as EpisodicEvent;
-          if (!options.eventTypes || options.eventTypes.includes(e.eventType)) {
-            events.unshift(e);
-          }
-        } catch { /* skip malformed */ }
+          const buf = Buffer.alloc(MAX_READ_BYTES);
+          await fh.read(buf, 0, MAX_READ_BYTES, stat.size - MAX_READ_BYTES);
+          content = buf.toString('utf-8');
+        } finally {
+          await fh.close();
+        }
+      } else {
+        content = await fs.readFile(file, 'utf-8');
       }
-      return events;
     } catch {
       return [];
     }
+    const lines = content.split('\n').filter(Boolean);
+    // Read from the end to get most recent
+    const events: EpisodicEvent[] = [];
+    for (let i = lines.length - 1; i >= 0 && events.length < limit; i--) {
+      try {
+        const e = JSON.parse(lines[i]) as EpisodicEvent;
+        if (!options.eventTypes || options.eventTypes.includes(e.eventType)) {
+          events.unshift(e);
+        }
+      } catch { /* skip malformed lines */ }
+    }
+    return events;
   }
 
   /** Build a compact summary string for a session (for memory injection) */

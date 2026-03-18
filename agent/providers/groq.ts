@@ -52,6 +52,18 @@ export class GroqProvider implements Provider {
       response_format: tools.length === 0 ? { type: 'json_object' } : undefined,
     });
 
-    return normalizeOpenAIResponse(res, this.providerName);
+    // Wrap normalizer in try/catch: json_object mode may return non-JSON on some models
+    try {
+      return normalizeOpenAIResponse(res, this.providerName);
+    } catch (err) {
+      return {
+        text: res.choices[0]?.message?.content ?? '',
+        toolCalls: [],
+        stopReason: 'end_turn',
+        inputTokens: res.usage?.prompt_tokens ?? 0,
+        outputTokens: res.usage?.completion_tokens ?? 0,
+        providerName: this.providerName,
+      };
+    }
   }
 }

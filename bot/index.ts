@@ -24,7 +24,29 @@ if (!process.env.GROQ_API_KEY && !process.env.DEEPSEEK_API_KEY && !process.env.G
 }
 
 // ── Pending tasks awaiting confirm (approve/cancel buttons) ────────────────
+// TTL map: each entry has a cleanup timer to prevent indefinite accumulation
+const PENDING_TASK_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const pendingTaskTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const pendingTasks = new Map<string, { intent: ParsedIntent; channelId: string; threadTs: string }>();
+
+function storePendingTask(taskId: string, value: { intent: ParsedIntent; channelId: string; threadTs: string }): void {
+  pendingTasks.set(taskId, value);
+  const timer = setTimeout(() => {
+    pendingTasks.delete(taskId);
+    pendingTaskTimers.delete(taskId);
+  }, PENDING_TASK_TTL_MS);
+  pendingTaskTimers.set(taskId, timer);
+}
+
+function consumePendingTask(taskId: string): { intent: ParsedIntent; channelId: string; threadTs: string } | undefined {
+  const value = pendingTasks.get(taskId);
+  if (value !== undefined) {
+    pendingTasks.delete(taskId);
+    const timer = pendingTaskTimers.get(taskId);
+    if (timer) { clearTimeout(timer); pendingTaskTimers.delete(taskId); }
+  }
+  return value;
+}
 
 // ── Slack App (Socket Mode — no public URL required) ───────────────────────
 const app = new App({
@@ -305,9 +327,7 @@ app.message(async ({ message, say, client: slackClient }: any) => {
     await say({ text: `🔎 Detecting project at \`${repoPath}\`...`, thread_ts: threadTs });
     try {
       const detected = await detectProject(alias, repoPath);
-      // Write AGENT_CONTEXT.md to the repo
-      const fs = await import("fs/promises");
-      const path = await import("path");
+      // Write AGENT_CONTEXT.md to the repo (use top-level fs and path imports)
       const contextPath = path.join(repoPath, "AGENT_CONTEXT.md");
       const existingContext = await fs.readFile(contextPath, "utf-8").catch(() => null);
       if (!existingContext) {
@@ -537,48 +557,52 @@ async function runPlanAndConfirm(
   }
 
   const taskId = randomUUID();
-  pendingTasks.set(taskId, { intent, channelId, threadTs });
+  storePendingTask(taskId, { intent, channelId, threadTs });
 
   // Slack block text has a 3000 char limit
   const planText = plan.length > 2800 ? plan.slice(0, 2800) + "\n…(truncated)" : plan;
 
-  await slackClient.chat.postMessage({
-    channel: channelId,
-    thread_ts: threadTs,
-    text: "📋 Plan ready — approve to implement or cancel.",
-    blocks: [
-      {
-        type: "section",
-        text: { type: "mrkdwn", text: `📋 *Implementation Plan*\n\n${planText}` },
-      },
-      {
-        type: "actions",
-        block_id: `confirm_${taskId}`,
-        elements: [
-          {
-            type: "button",
-            text: { type: "plain_text", text: "✅ Approve & Implement", emoji: true },
-            style: "primary",
-            action_id: "approve_task",
-            value: taskId,
-          },
-          {
-            type: "button",
-            text: { type: "plain_text", text: "💬 Add Extra Context", emoji: true },
-            action_id: "add_context",
-            value: taskId,
-          },
-          {
-            type: "button",
-            text: { type: "plain_text", text: "❌ Cancel", emoji: true },
-            style: "danger",
-            action_id: "cancel_task",
-            value: taskId,
-          },
-        ],
-      },
-    ],
-  });
+  try {
+    await slackClient.chat.postMessage({
+      channel: channelId,
+      thread_ts: threadTs,
+      text: "📋 Plan ready — approve to implement or cancel.",
+      blocks: [
+        {
+          type: "section",
+          text: { type: "mrkdwn", text: `📋 *Implementation Plan*\n\n${planText}` },
+        },
+        {
+          type: "actions",
+          block_id: `confirm_${taskId}`,
+          elements: [
+            {
+              type: "button",
+              text: { type: "plain_text", text: "✅ Approve & Implement", emoji: true },
+              style: "primary",
+              action_id: "approve_task",
+              value: taskId,
+            },
+            {
+              type: "button",
+              text: { type: "plain_text", text: "💬 Add Extra Context", emoji: true },
+              action_id: "add_context",
+              value: taskId,
+            },
+            {
+              type: "button",
+              text: { type: "plain_text", text: "❌ Cancel", emoji: true },
+              style: "danger",
+              action_id: "cancel_task",
+              value: taskId,
+            },
+          ],
+        },
+      ],
+    });
+  } catch (err) {
+    console.error(`[${new Date().toISOString()}] Slack postMessage error (plan+confirm):`, String(err));
+  }
 }
 
 // ── Button action: Approve ─────────────────────────────────────────────────
@@ -586,13 +610,16 @@ async function runPlanAndConfirm(
 app.action("approve_task", async ({ body, ack, client: slackClient }: any) => {
   await ack();
   const taskId = (body.actions as Array<{ value: string }>)[0]?.value;
-  const pending = pendingTasks.get(taskId);
+  const pending = consumePendingTask(taskId);
   if (!pending) return; // already approved/cancelled (duplicate event from Slack)
-  pendingTasks.delete(taskId);
 
   const { intent, channelId, threadTs } = pending;
   const progressCallback = async (update: string): Promise<void> => {
-    await slackClient.chat.postMessage({ channel: channelId, thread_ts: threadTs, text: update, mrkdwn: true });
+    try {
+      await slackClient.chat.postMessage({ channel: channelId, thread_ts: threadTs, text: update, mrkdwn: true });
+    } catch (e) {
+      console.error(`[${new Date().toISOString()}] Slack postMessage error (progress):`, String(e));
+    }
   };
 
   await progressCallback("⚙️ Starting implementation...");
@@ -604,18 +631,26 @@ app.action("approve_task", async ({ body, ack, client: slackClient }: any) => {
       progressCallback,
       "implement"
     );
-    await slackClient.chat.postMessage({
-      channel: channelId,
-      thread_ts: threadTs,
-      text: ["✅ *Task Complete*", "", result, "", "---", "📝 *Next step*: review changes, commit & push."].join("\n"),
-      mrkdwn: true,
-    });
+    try {
+      await slackClient.chat.postMessage({
+        channel: channelId,
+        thread_ts: threadTs,
+        text: ["✅ *Task Complete*", "", result, "", "---", "📝 *Next step*: review changes, commit & push."].join("\n"),
+        mrkdwn: true,
+      });
+    } catch (e) {
+      console.error(`[${new Date().toISOString()}] Slack postMessage error (task complete):`, String(e));
+    }
   } catch (err) {
-    await slackClient.chat.postMessage({
-      channel: channelId,
-      thread_ts: threadTs,
-      text: `❌ *Agent error*: ${String(err)}`,
-    });
+    try {
+      await slackClient.chat.postMessage({
+        channel: channelId,
+        thread_ts: threadTs,
+        text: `❌ *Agent error*: ${String(err)}`,
+      });
+    } catch (e) {
+      console.error(`[${new Date().toISOString()}] Slack postMessage error (agent error):`, String(e));
+    }
   }
 });
 
@@ -666,11 +701,10 @@ app.action("add_context", async ({ body, ack, client: slackClient }: any) => {
 app.view("add_context_modal", async ({ body, ack, client: slackClient }: any) => {
   await ack();
   const taskId = body.view.private_metadata as string;
-  const pending = pendingTasks.get(taskId);
+  const pending = consumePendingTask(taskId);
   if (!pending) return; // already handled
 
   const extraContext = (body.view.state.values.context_input?.context_text?.value ?? "") as string;
-  pendingTasks.delete(taskId);
 
   const { intent, channelId, threadTs } = pending;
 
@@ -694,13 +728,17 @@ app.action("cancel_task", async ({ body, ack, client: slackClient }: any) => {
   await ack();
   const taskId = (body.actions as Array<{ value: string }>)[0]?.value;
   // Only post if the task was actually still pending (prevents duplicate messages on repeated clicks)
-  const wasPending = pendingTasks.delete(taskId);
+  const wasPending = consumePendingTask(taskId);
   if (!wasPending) return;
-  await slackClient.chat.postMessage({
-    channel: body.channel.id,
-    thread_ts: body.message?.thread_ts ?? body.message?.ts,
-    text: "🚫 Task cancelled.",
-  });
+  try {
+    await slackClient.chat.postMessage({
+      channel: body.channel.id,
+      thread_ts: body.message?.thread_ts ?? body.message?.ts,
+      text: "🚫 Task cancelled.",
+    });
+  } catch (e) {
+    console.error(`[${new Date().toISOString()}] Slack postMessage error (cancel):`, String(e));
+  }
 });
 
 // ── Start ──────────────────────────────────────────────────────────────────
@@ -713,7 +751,7 @@ app.action("cancel_task", async ({ body, ack, client: slackClient }: any) => {
     process.env.GROQ_API_KEY && "Groq (T3)",
     "Claude CLI (T4 fallback)",
   ].filter(Boolean).join(", ");
-  console.log("⚡ Agentic Factory Bot is running (Socket Mode)");
+  console.log("⚡ Automation Factories Bot is running (Socket Mode)");
   console.log(`📦 Registered repos: ${aliases.join(", ")}`);
   console.log(`🤖 Providers: ${activeProviders}`);
   console.log("📡 Git: Phase 3 will add auto-branch + MR generation");

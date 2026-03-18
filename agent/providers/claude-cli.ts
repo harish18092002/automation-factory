@@ -44,14 +44,17 @@ export class ClaudeCLIProvider implements Provider {
       return errorResponse(this.providerName, 'No user message to pass to Claude CLI');
     }
 
-    // Write system prompt to a temp file so it doesn't pollute the CLI args
+    // Read system prompt content and pass it inline via --system-prompt.
+    // Note: --system-prompt-file is not a supported Claude CLI flag.
+    // We write to a temp file for cleanup hygiene, then read it back for the inline arg.
     const systemText = options.systemBlocks.map((b) => b.text).join('\n\n');
     const tmpDir = os.tmpdir();
     const systemFile = path.join(tmpDir, `agent-system-${Date.now()}.txt`);
     await fs.writeFile(systemFile, systemText, 'utf-8');
 
+    // Note: if spawn fails before the try block completes, the finally still runs cleanup.
     try {
-      const output = await runClaudeCLI(task, systemFile, options.maxTokens);
+      const output = await runClaudeCLI(task, systemText, options.maxTokens, options.repoPaths ?? []);
       return {
         text: output,
         toolCalls: [],
@@ -66,23 +69,30 @@ export class ClaudeCLIProvider implements Provider {
   }
 }
 
-async function runClaudeCLI(task: string, systemFile: string, maxTokens: number): Promise<string> {
+async function runClaudeCLI(task: string, systemText: string, maxTokens: number, repoPaths: string[]): Promise<string> {
   // Derive turn budget from token budget: implement (8096) → 12 turns, research (4096) → 8, question (2048) → 5
   const maxTurns = maxTokens >= 8000 ? 12 : maxTokens >= 4000 ? 8 : 5;
+
+  // Increase timeout for implement mode (maxTurns=12 can easily exceed 120s for large tasks)
+  const timeoutMs = maxTokens >= 8000 ? 300_000 : 120_000;
 
   return new Promise((resolve, reject) => {
     const args = [
       '--print',
       task,
       '--output-format', 'text',
-      '--system-prompt-file', systemFile,
+      '--system-prompt', systemText,
       '--max-turns', String(maxTurns),
-      // No --allowedTools restriction — let Claude CLI use its built-in file/search tools
     ];
+
+    // Grant filesystem access to each registered repo path
+    for (const repoPath of repoPaths) {
+      args.push('--add-dir', repoPath);
+    }
 
     const proc = spawn('claude', args, {
       stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: 120_000,
+      timeout: timeoutMs,
     });
 
     let stdout = '';

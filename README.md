@@ -1,4 +1,4 @@
-# surf-agent — Autonomous Engineering Bot
+# automation-factories — Autonomous Engineering Bot
 
 A Slack bot that autonomously researches, plans, implements, verifies, and commits code changes across multiple repositories — directly from a natural language message.
 
@@ -73,7 +73,7 @@ npm start          # production
 4. Add **Bot Token Scopes**: `chat:write`, `channels:history`, `groups:history`, `im:history`
 5. Enable **Interactivity** (for Approve/Cancel/Add-Context buttons) → set any Request URL
 6. Install to workspace → copy **Bot User OAuth Token** → `SLACK_BOT_TOKEN`
-7. Invite bot to channel: `/invite @surf-agent`
+7. Invite bot to channel: `/invite @automation-factories`
 
 ---
 

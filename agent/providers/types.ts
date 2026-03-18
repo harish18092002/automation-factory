@@ -90,6 +90,8 @@ export interface ProviderChatOptions {
   maxTokens: number;
   systemBlocks: ProviderSystemBlock[];
   temperature?: number;
+  /** Filesystem paths the Claude CLI subprocess should be granted access to via --add-dir */
+  repoPaths?: string[];
 }
 
 // ── Provider interface ────────────────────────────────────────────────────────

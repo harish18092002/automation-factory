@@ -1,7 +1,7 @@
 {
-  "name": "surfboard-claude-agent",
+  "name": "automation-factories",
   "version": "2.0.0",
-  "description": "Agentic Factory — multi-provider AI agent for Surfboard engineering repos",
+  "description": "Automation Factories — multi-provider AI agent for engineering repos",
   "private": true,
   "engines": {
     "node": ">=20.0.0"

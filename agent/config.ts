@@ -1,7 +1,8 @@
 import fs from "fs/promises";
 import path from "path";
 
-// __dirname is available in CommonJS (tsx compiles to CJS by default)
+// In NodeNext/CommonJS mode (no "type":"module" in package.json),
+// __dirname is available as a native CJS global — no import needed.
 export const CONFIG_PATH = path.join(__dirname, "repos.config.json");
 
 export interface RepoEntry {
@@ -29,14 +30,27 @@ export interface RepoConfig {
 }
 
 export async function getRepoConfig(): Promise<RepoConfig> {
-  const raw = await fs.readFile(CONFIG_PATH, "utf-8");
-  return JSON.parse(raw) as RepoConfig;
+  try {
+    const raw = await fs.readFile(CONFIG_PATH, "utf-8");
+    return JSON.parse(raw) as RepoConfig;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return { repos: {} };
+    }
+    throw err;
+  }
 }
 
+// Simple async mutex: serialise all writes via a promise chain lock to prevent race conditions
+let writeLock: Promise<void> = Promise.resolve();
+
 export async function addRepo(alias: string, entry: RepoEntry): Promise<void> {
-  const config = await getRepoConfig();
-  config.repos[alias] = entry;
-  await fs.writeFile(CONFIG_PATH, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  writeLock = writeLock.then(async () => {
+    const config = await getRepoConfig();
+    config.repos[alias] = entry;
+    await fs.writeFile(CONFIG_PATH, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  });
+  return writeLock;
 }
 
 export async function getRepoAliases(): Promise<string[]> {

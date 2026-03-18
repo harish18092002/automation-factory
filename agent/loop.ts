@@ -248,6 +248,10 @@ export async function runAgentLoop(
 
   const systemBlocks = await buildSystemPromptBlocks(repoAlias, serviceHint, executionMode, memoryFragment, feedbackFromPreviousAttempt);
 
+  // Resolve repo path for Claude CLI --add-dir (grants filesystem access)
+  const repoConfig = await getRepoConfig();
+  const repoPaths = repoConfig.repos[repoAlias] ? [repoConfig.repos[repoAlias].path] : [];
+
   const activeTools: ProviderTool[] =
     executionMode === 'implement'
       ? toolDefinitions
@@ -284,9 +288,9 @@ export async function runAgentLoop(
 
   async function flushPendingReads(): Promise<void> {
     if (pendingReadSummaries.length === 0 || !progressCallback) return;
+    if (pendingReadFlushTimer) { clearTimeout(pendingReadFlushTimer); pendingReadFlushTimer = null; }
     const batch = pendingReadSummaries.splice(0);
     await progressCallback(`📂 *Reading files* (${batch.length}):\n${batch.map((f) => `  • ${f}`).join('\n')}`);
-    if (pendingReadFlushTimer) { clearTimeout(pendingReadFlushTimer); pendingReadFlushTimer = null; }
   }
 
   while (iteration < maxIterations) {
@@ -297,7 +301,8 @@ export async function runAgentLoop(
     }
 
     // Call provider with cascading fallback through all tiers on error
-    let response = await provider.chat(messages, activeTools, { maxTokens, systemBlocks }).catch(
+    const chatOptions = { maxTokens, systemBlocks, repoPaths };
+    let response = await provider.chat(messages, activeTools, chatOptions).catch(
       async (err: unknown) => {
         const errMsg = String(err);
         // Retry with next tiers for transient/compatibility errors
@@ -310,7 +315,7 @@ export async function runAgentLoop(
             const fallback = ProviderRouter.selectAtTier(tier);
             if (fallback.providerName === provider.providerName) continue; // skip same provider
             try {
-              return await fallback.chat(messages, activeTools, { maxTokens, systemBlocks });
+              return await fallback.chat(messages, activeTools, chatOptions);
             } catch (fallbackErr) {
               if (tier === 999) throw fallbackErr; // exhausted all tiers
               if (progressCallback) {
@@ -353,8 +358,7 @@ export async function runAgentLoop(
           const readKey = `${String(toolCall.input.repo ?? repoAlias)}/${String(toolCall.input.relative_path)}`;
           if (filesAlreadyRead.has(readKey)) {
             // Return cached hint instead of re-reading
-            const messages_ref = messages;
-            messages_ref.push({
+            messages.push({
               role: 'tool',
               tool_call_id: toolCall.id,
               content: JSON.stringify({ success: false, error: 'Already read this file. Use the content from earlier in context.' }),
@@ -364,6 +368,10 @@ export async function runAgentLoop(
           filesAlreadyRead.add(readKey);
           // Batch into pending summary instead of individual Slack message
           pendingReadSummaries.push(buildInputSummary(toolCall.name, toolCall.input));
+          // Schedule a timer flush after first read is queued (500ms debounce)
+          if (pendingReadSummaries.length === 1 && progressCallback) {
+            pendingReadFlushTimer = setTimeout(() => { flushPendingReads().catch(() => {}); }, 500);
+          }
           if (pendingReadSummaries.length >= 5) await flushPendingReads();
         } else {
           // Non-read tool: flush pending reads first, then post this tool immediately
@@ -411,7 +419,7 @@ export async function runAgentLoop(
     break;
   }
 
-  // Flush any remaining batched read summaries
+  // Flush any remaining batched read summaries before recording session end
   await flushPendingReads();
 
   if (iteration >= maxIterations) {
@@ -422,6 +430,7 @@ export async function runAgentLoop(
 
   // Record session outcome in episodic memory (success or failure)
   session.filesModified = filesModified;
+  // providerUsed is typed as optional string on AgentSession
   session.providerUsed = provider.providerName;
   const sessionOutcome: AgentSession['outcome'] = lastTextResponse ? 'success' : 'failed';
   await memoryManager.recordSessionEnd(session, sessionOutcome).catch(() => {});

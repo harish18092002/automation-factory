@@ -231,8 +231,12 @@ export interface ToolResult {
 
 export async function executeToolCall(
   toolName: string,
-  input: Record<string, unknown>
+  input: Record<string, unknown> | undefined
 ): Promise<ToolResult> {
+  // Guard against missing input
+  if (!input) {
+    return { success: false, error: 'Tool input is undefined' };
+  }
 
   // ── web_search ─────────────────────────────────────────────────────────────
   if (toolName === 'web_search') {
@@ -367,9 +371,11 @@ export async function executeToolCall(
 
   // ── run_command ───────────────────────────────────────────────────────────
   if (toolName === 'run_command') {
-    const cwd = input.relative_cwd
+    const rawCwd = input.relative_cwd
       ? path.join(repo.path, input.relative_cwd as string)
       : repo.path;
+    // Resolve to an absolute path before execution and safety check
+    const cwd = path.resolve(rawCwd);
     await assertPathSafe(cwd);
 
     const dangerous = ['rm -rf', 'git push --force', 'drop table', 'DROP TABLE', 'format c:'];
