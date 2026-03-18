@@ -1,5 +1,8 @@
 import { App } from "@slack/bolt";
-import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
+import path from "path";
+import fs from "fs/promises";
+import { randomUUID } from "crypto";
 import "dotenv/config";
 import { runAgentLoop } from "../agent/loop.js";
 import { getRepoConfig, getRepoAliases, addRepo } from "../agent/config.js";
@@ -8,13 +11,20 @@ import { detectProject } from "../agent/project-detector.js";
 import type { ExecutionMode } from "../agent/classifier.js";
 
 // ── Env validation ─────────────────────────────────────────────────────────
-const REQUIRED_ENV = ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "ANTHROPIC_API_KEY"];
+// At least one AI provider key is required
+const REQUIRED_ENV = ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"];
 for (const key of REQUIRED_ENV) {
   if (!process.env[key]) {
     console.error(`Missing required environment variable: ${key}`);
     process.exit(1);
   }
 }
+if (!process.env.GROQ_API_KEY && !process.env.DEEPSEEK_API_KEY && !process.env.GEMINI_API_KEY) {
+  console.warn("⚠️  No AI provider API keys found. Set GROQ_API_KEY, DEEPSEEK_API_KEY, or GEMINI_API_KEY. Falling back to Claude CLI.");
+}
+
+// ── Pending tasks awaiting confirm (approve/cancel buttons) ────────────────
+const pendingTasks = new Map<string, { intent: ParsedIntent; channelId: string; threadTs: string }>();
 
 // ── Slack App (Socket Mode — no public URL required) ───────────────────────
 const app = new App({
@@ -23,9 +33,21 @@ const app = new App({
   socketMode: true,
 });
 
-const claude = new Anthropic();
-// Use haiku for intent parsing — fast and cheap
-const INTENT_MODEL = "claude-haiku-4-5-20251001";
+// Intent parsing uses Groq (fastest/cheapest) or DeepSeek as fallback.
+// In non-personal mode (IS_PERSONAL !== 'yes') no API keys are used — returns no client
+// so parseIntent falls back to classifier result and the agent loop uses Claude CLI.
+function getIntentClient(): { client: OpenAI; model: string } {
+  if (process.env.IS_PERSONAL !== 'yes') {
+    return { client: new OpenAI({ apiKey: "placeholder", baseURL: "https://api.groq.com/openai/v1" }), model: "" };
+  }
+  if (process.env.GROQ_API_KEY) {
+    return { client: new OpenAI({ apiKey: process.env.GROQ_API_KEY, baseURL: "https://api.groq.com/openai/v1" }), model: "llama-3.1-8b-instant" };
+  }
+  if (process.env.DEEPSEEK_API_KEY) {
+    return { client: new OpenAI({ apiKey: process.env.DEEPSEEK_API_KEY, baseURL: "https://api.deepseek.com" }), model: "deepseek-chat" };
+  }
+  return { client: new OpenAI({ apiKey: "placeholder", baseURL: "https://api.groq.com/openai/v1" }), model: "" };
+}
 
 // ── Intent types ───────────────────────────────────────────────────────────
 interface ParsedIntent {
@@ -89,37 +111,54 @@ async function parseIntent(
     ? `\nThe repo is CONFIRMED as "${confirmedRepo}". Set "repo" to "${confirmedRepo}" in your response.`
     : "\nIf you cannot determine the repo, set repo to null.";
 
-  const res = await claude.messages.create({
-    model: INTENT_MODEL,
+  const { client: intentClient, model: intentModel } = getIntentClient();
+  if (!intentModel) {
+    // No provider available — return minimal intent if we have a confirmed repo
+    if (confirmedRepo) {
+      return { repo: confirmedRepo, repos: [confirmedRepo], service: null, taskType: "other", executionMode, description: "agent-task", fullTask: userMessage, needsWebSearch: false };
+    }
+    return null;
+  }
+
+  const systemPrompt = [
+    "You are a strict intent-parsing assistant for a multi-repo engineering bot.",
+    "",
+    "Available repos:",
+    repoSummary,
+    repoInstruction,
+    "",
+    "Extract a JSON object. Respond with ONLY valid JSON — no markdown, no backticks.",
+    "IMPORTANT RULES:",
+    "- taskType must match the user's actual intent. 'What does X do?' → 'question'. 'Explain X' → 'research'. Only use 'refactor'/'feature'/'bugfix' if the user explicitly asks to change code.",
+    "- fullTask must be the user's original message VERBATIM. Do NOT rephrase, expand, or transform it.",
+    "- needsWebSearch must be false for questions about repo code — the agent can read the repo files directly.",
+    "",
+    "Schema:",
+    "{",
+    '  "repo": string,           // primary repo alias (must match exactly), or null if unclear',
+    '  "repos": string[],        // ALL repo aliases involved (can be multiple for cross-repo tasks)',
+    '  "service": string|null,   // service name within the primary repo, or null',
+    '  "taskType": "feature"|"bugfix"|"refactor"|"test"|"question"|"research"|"other",',
+    '  "description": string,    // max 50 chars, kebab-case, suitable for a git branch name',
+    '  "fullTask": string,       // VERBATIM copy of the user\'s message — do NOT rephrase or expand',
+    '  "needsWebSearch": boolean // true ONLY if task needs external docs/APIs not in the repo',
+    "}",
+  ].join("\n");
+
+  const res = await intentClient.chat.completions.create({
+    model: intentModel,
     max_tokens: 400,
-    system: [
-      "You are a strict intent-parsing assistant for a multi-repo engineering bot.",
-      "",
-      "Available repos:",
-      repoSummary,
-      repoInstruction,
-      "",
-      "Extract a JSON object. Respond with ONLY valid JSON — no markdown, no backticks.",
-      "Schema:",
-      "{",
-      '  "repo": string,           // primary repo alias (must match exactly), or null if unclear',
-      '  "repos": string[],        // ALL repo aliases involved (can be multiple for cross-repo tasks)',
-      '  "service": string|null,   // service name within the primary repo, or null',
-      '  "taskType": "feature"|"bugfix"|"refactor"|"test"|"question"|"research"|"other",',
-      '  "description": string,    // max 50 chars, kebab-case, suitable for a git branch name',
-      '  "fullTask": string,       // complete task instruction for the AI agent',
-      '  "needsWebSearch": boolean // true if task needs external documentation or API reference',
-      "}",
-    ].join("\n"),
-    messages: [{ role: "user", content: userMessage }],
+    temperature: 0,
+    response_format: { type: "json_object" },
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userMessage },
+    ],
   });
 
   try {
-    const content = res.content as Array<{ type: string; text?: string }>;
-    const textBlock = content.find((b) => b.type === "text");
-    if (!textBlock?.text) return null;
-
-    const raw = JSON.parse(textBlock.text) as Omit<ParsedIntent, "executionMode">;
+    const text = res.choices[0]?.message.content ?? "";
+    const raw = JSON.parse(text) as Omit<ParsedIntent, "executionMode">;
 
     // If LLM ignored the confirmed repo, override it (handles LLM hallucination)
     if (confirmedRepo && (!raw.repo || !repoAliases.includes(raw.repo))) {
@@ -162,6 +201,9 @@ async function parseIntent(
 const REGISTRATION_RE =
   /(?:register\s+project|\/add-project)\s+(\S+)\s+(?:at\s+)?(\/.+)/i;
 
+// Matches: "/add-dir /absolute/path" — alias auto-derived from directory name
+const ADD_DIR_RE = /\/add-dir\s+(\/\S+)/i;
+
 // ── Slack message handler ──────────────────────────────────────────────────
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 app.message(async ({ message, say, client: slackClient }: any) => {
@@ -173,6 +215,88 @@ app.message(async ({ message, say, client: slackClient }: any) => {
   const threadTs: string = message.ts;
   const channelId: string = message.channel;
   const msgText: string = message.text as string;
+
+  // ── /add-dir command ─────────────────────────────────────────────────────
+  const addDirMatch = msgText.match(ADD_DIR_RE);
+  if (addDirMatch) {
+    const repoPath = addDirMatch[1].trim();
+    const alias = path.basename(repoPath);
+    await say({ text: `🔎 Detecting project at \`${repoPath}\` (alias: \`${alias}\`)...`, thread_ts: threadTs });
+    try {
+      const detected = await detectProject(alias, repoPath);
+      const contextPath = path.join(repoPath, "AGENT_CONTEXT.md");
+      const existingContext = await fs.readFile(contextPath, "utf-8").catch(() => null);
+
+      // Always write the scaffolded context first so the agent has a template to fill in
+      if (!existingContext) {
+        await fs.writeFile(contextPath, detected.agentContextMd, "utf-8");
+      }
+      await addRepo(alias, detected.configEntry);
+
+      await say({
+        text: [
+          `✅ *Project registered: \`${alias}\`*`,
+          `• ${detected.summary}`,
+          `• Path: \`${repoPath}\``,
+          existingContext
+            ? "• AGENT_CONTEXT.md: already existed, kept as-is — skipping deep analysis"
+            : "• AGENT_CONTEXT.md: scaffolded — running deep analysis to fill it in...",
+        ].join("\n"),
+        thread_ts: threadTs,
+      });
+
+      // If no existing context, run a deep analysis to replace <<CONFIRM>> placeholders
+      if (!existingContext) {
+        const progressCallback = async (update: string): Promise<void> => {
+          await slackClient.chat.postMessage({
+            channel: channelId,
+            thread_ts: threadTs,
+            text: update,
+            mrkdwn: true,
+          });
+        };
+
+        const analyzeTask = [
+          `Analyze this repository and rewrite AGENT_CONTEXT.md at the repo root with accurate, real information.`,
+          ``,
+          `Follow these steps:`,
+          `1. Read the current AGENT_CONTEXT.md to see the scaffold and <<CONFIRM>> placeholders`,
+          `2. Read README.md (or any README file) at the repo root`,
+          `3. Read package.json to understand dependencies, scripts, and project name`,
+          `4. Call list_directory on the repo root and on the srcDir to see what services/apps exist`,
+          `5. For each service/app found, read its entry point (main.ts / index.ts) and any README`,
+          `6. Rewrite AGENT_CONTEXT.md replacing ALL <<CONFIRM>> placeholders with real information:`,
+          `   - Purpose: what the repo actually does`,
+          `   - Each service row: real port (if found in code) and real responsibility description`,
+          `   - Coding conventions: based on actual patterns you observed`,
+          ``,
+          `Keep the existing markdown structure. Only replace <<CONFIRM>> text with real content.`,
+          `Write the complete updated file using write_file.`,
+        ].join("\n");
+
+        try {
+          await runAgentLoop(alias, analyzeTask, undefined, progressCallback, "implement");
+          await say({
+            text: `✅ *Deep analysis complete for \`${alias}\`* — AGENT_CONTEXT.md is now ready. You can ask questions about this project.`,
+            thread_ts: threadTs,
+          });
+        } catch (err) {
+          await say({
+            text: `⚠️ Deep analysis failed (${String(err)}). You can manually edit \`${contextPath}\` to fill in the <<CONFIRM>> placeholders.`,
+            thread_ts: threadTs,
+          });
+        }
+      } else {
+        await say({
+          text: `You can now ask questions about \`${alias}\` just like other repos.`,
+          thread_ts: threadTs,
+        });
+      }
+    } catch (err) {
+      await say({ text: `❌ Registration failed: ${String(err)}`, thread_ts: threadTs });
+    }
+    return;
+  }
 
   // ── Registration command ─────────────────────────────────────────────────
   const regMatch = msgText.match(REGISTRATION_RE);
@@ -276,7 +400,7 @@ app.message(async ({ message, say, client: slackClient }: any) => {
         ? "⚡ Answering..."
         : intent.executionMode === "research"
         ? "🔬 Researching codebase..."
-        : "⚙️ Starting agent (explore → plan → implement)...",
+        : "🔬 Analyzing codebase — will show plan for approval before making changes...",
     ].join("\n"),
     thread_ts: threadTs,
   });
@@ -293,6 +417,13 @@ app.message(async ({ message, say, client: slackClient }: any) => {
 
   // ── Single-repo execution ────────────────────────────────────────────────
   if (!isMultiRepo) {
+    // Implement mode: research → show plan → wait for approval → execute
+    if (intent.executionMode === "implement") {
+      await runPlanAndConfirm(intent, channelId, threadTs, progressCallback, slackClient);
+      return;
+    }
+
+    // Question / Research: answer directly
     let agentResult: string;
     try {
       agentResult = await runAgentLoop(
@@ -309,15 +440,10 @@ app.message(async ({ message, say, client: slackClient }: any) => {
 
     await say({
       text: [
-        intent.executionMode === "question" ? "💬 *Answer*" : "✅ *Task Complete*",
+        intent.executionMode === "question" ? "💬 *Answer*" : "✅ *Research Complete*",
         "",
         agentResult,
-        intent.executionMode === "implement"
-          ? "\n---\n📝 *Next step (manual for now)*: review the changes, then commit & push."
-          : "",
-      ]
-        .filter(Boolean)
-        .join("\n"),
+      ].filter(Boolean).join("\n"),
       thread_ts: threadTs,
       mrkdwn: true,
     });
@@ -368,14 +494,229 @@ app.message(async ({ message, say, client: slackClient }: any) => {
   });
 });
 
+// ── Plan + Confirm flow ────────────────────────────────────────────────────
+// Runs a read-only research pass, posts the plan with Approve/Cancel buttons,
+// then waits for the user to approve before executing any writes.
+async function runPlanAndConfirm(
+  intent: ParsedIntent,
+  channelId: string,
+  threadTs: string,
+  progressCallback: (update: string) => Promise<void>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  slackClient: any
+): Promise<void> {
+  const planTask = [
+    `PLANNING PHASE — analyze the codebase only. Do NOT write any files yet.`,
+    ``,
+    `Task: ${intent.fullTask}`,
+    `Target service: ${intent.service ?? "repo-wide"}`,
+    ``,
+    `Produce a structured implementation plan:`,
+    `1. **Understanding**: What does this task require? (2-3 sentences)`,
+    `2. **Files to modify**: Each file path + what change you'll make`,
+    `3. **Files to create**: Any new files needed`,
+    `4. **Risks / dependencies**: Anything that could break or needs attention`,
+    ``,
+    `Research the code, then return the plan. Do NOT write any files.`,
+  ].join("\n");
+
+  await progressCallback("🔬 Researching codebase to build a plan...");
+
+  let plan: string;
+  try {
+    plan = await runAgentLoop(
+      intent.repo,
+      planTask,
+      intent.service ?? undefined,
+      progressCallback,
+      "research"
+    );
+  } catch (err) {
+    await progressCallback(`❌ Planning failed: ${String(err)}`);
+    return;
+  }
+
+  const taskId = randomUUID();
+  pendingTasks.set(taskId, { intent, channelId, threadTs });
+
+  // Slack block text has a 3000 char limit
+  const planText = plan.length > 2800 ? plan.slice(0, 2800) + "\n…(truncated)" : plan;
+
+  await slackClient.chat.postMessage({
+    channel: channelId,
+    thread_ts: threadTs,
+    text: "📋 Plan ready — approve to implement or cancel.",
+    blocks: [
+      {
+        type: "section",
+        text: { type: "mrkdwn", text: `📋 *Implementation Plan*\n\n${planText}` },
+      },
+      {
+        type: "actions",
+        block_id: `confirm_${taskId}`,
+        elements: [
+          {
+            type: "button",
+            text: { type: "plain_text", text: "✅ Approve & Implement", emoji: true },
+            style: "primary",
+            action_id: "approve_task",
+            value: taskId,
+          },
+          {
+            type: "button",
+            text: { type: "plain_text", text: "💬 Add Extra Context", emoji: true },
+            action_id: "add_context",
+            value: taskId,
+          },
+          {
+            type: "button",
+            text: { type: "plain_text", text: "❌ Cancel", emoji: true },
+            style: "danger",
+            action_id: "cancel_task",
+            value: taskId,
+          },
+        ],
+      },
+    ],
+  });
+}
+
+// ── Button action: Approve ─────────────────────────────────────────────────
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+app.action("approve_task", async ({ body, ack, client: slackClient }: any) => {
+  await ack();
+  const taskId = (body.actions as Array<{ value: string }>)[0]?.value;
+  const pending = pendingTasks.get(taskId);
+  if (!pending) return; // already approved/cancelled (duplicate event from Slack)
+  pendingTasks.delete(taskId);
+
+  const { intent, channelId, threadTs } = pending;
+  const progressCallback = async (update: string): Promise<void> => {
+    await slackClient.chat.postMessage({ channel: channelId, thread_ts: threadTs, text: update, mrkdwn: true });
+  };
+
+  await progressCallback("⚙️ Starting implementation...");
+  try {
+    const result = await runAgentLoop(
+      intent.repo,
+      intent.fullTask,
+      intent.service ?? undefined,
+      progressCallback,
+      "implement"
+    );
+    await slackClient.chat.postMessage({
+      channel: channelId,
+      thread_ts: threadTs,
+      text: ["✅ *Task Complete*", "", result, "", "---", "📝 *Next step*: review changes, commit & push."].join("\n"),
+      mrkdwn: true,
+    });
+  } catch (err) {
+    await slackClient.chat.postMessage({
+      channel: channelId,
+      thread_ts: threadTs,
+      text: `❌ *Agent error*: ${String(err)}`,
+    });
+  }
+});
+
+// ── Button action: Add Extra Context ──────────────────────────────────────
+// Opens a Slack modal so the user can type missing/incorrect context,
+// then re-runs the planning phase with the extra info appended.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+app.action("add_context", async ({ body, ack, client: slackClient }: any) => {
+  await ack();
+  const taskId = (body.actions as Array<{ value: string }>)[0]?.value;
+  if (!pendingTasks.has(taskId)) return; // already handled
+
+  await slackClient.views.open({
+    trigger_id: body.trigger_id,
+    view: {
+      type: "modal",
+      callback_id: "add_context_modal",
+      private_metadata: taskId,
+      title: { type: "plain_text", text: "Add Extra Context" },
+      submit: { type: "plain_text", text: "Re-analyze" },
+      close: { type: "plain_text", text: "Dismiss" },
+      blocks: [
+        {
+          type: "section",
+          text: { type: "mrkdwn", text: "What's missing or incorrect in the plan? Your input will be added to the task and the agent will re-analyze." },
+        },
+        {
+          type: "input",
+          block_id: "context_input",
+          label: { type: "plain_text", text: "Additional context" },
+          element: {
+            type: "plain_text_input",
+            action_id: "context_text",
+            multiline: true,
+            placeholder: {
+              type: "plain_text",
+              text: "e.g. The update route should also validate the email field. The customer lib uses a repository pattern, not direct DB calls.",
+            },
+          },
+        },
+      ],
+    },
+  });
+});
+
+// ── Modal submission: re-run planning with extra context ───────────────────
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+app.view("add_context_modal", async ({ body, ack, client: slackClient }: any) => {
+  await ack();
+  const taskId = body.view.private_metadata as string;
+  const pending = pendingTasks.get(taskId);
+  if (!pending) return; // already handled
+
+  const extraContext = (body.view.state.values.context_input?.context_text?.value ?? "") as string;
+  pendingTasks.delete(taskId);
+
+  const { intent, channelId, threadTs } = pending;
+
+  // Append extra context to the task so the agent uses it in re-analysis
+  const updatedIntent: ParsedIntent = {
+    ...intent,
+    fullTask: `${intent.fullTask}\n\n## Additional Context (from user)\n${extraContext}`,
+  };
+
+  const progressCallback = async (update: string): Promise<void> => {
+    await slackClient.chat.postMessage({ channel: channelId, thread_ts: threadTs, text: update, mrkdwn: true });
+  };
+
+  await progressCallback("🔄 Re-analyzing with additional context...");
+  await runPlanAndConfirm(updatedIntent, channelId, threadTs, progressCallback, slackClient);
+});
+
+// ── Button action: Cancel ──────────────────────────────────────────────────
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+app.action("cancel_task", async ({ body, ack, client: slackClient }: any) => {
+  await ack();
+  const taskId = (body.actions as Array<{ value: string }>)[0]?.value;
+  // Only post if the task was actually still pending (prevents duplicate messages on repeated clicks)
+  const wasPending = pendingTasks.delete(taskId);
+  if (!wasPending) return;
+  await slackClient.chat.postMessage({
+    channel: body.channel.id,
+    thread_ts: body.message?.thread_ts ?? body.message?.ts,
+    text: "🚫 Task cancelled.",
+  });
+});
+
 // ── Start ──────────────────────────────────────────────────────────────────
 (async () => {
   await app.start();
   const aliases = await getRepoAliases();
-  console.log("⚡ Claude Agent Bot is running (Socket Mode)");
+  const activeProviders = [
+    process.env.DEEPSEEK_API_KEY && "DeepSeek (T1)",
+    process.env.GEMINI_API_KEY && "Gemini Flash (T2)",
+    process.env.GROQ_API_KEY && "Groq (T3)",
+    "Claude CLI (T4 fallback)",
+  ].filter(Boolean).join(", ");
+  console.log("⚡ Agentic Factory Bot is running (Socket Mode)");
   console.log(`📦 Registered repos: ${aliases.join(", ")}`);
-  console.log("🧠 Models: haiku (intent/classify) + sonnet (agent)");
-  console.log("📡 Git host: git.surfboard.se (GitLab — Phase 2 will auto-push branches)");
+  console.log(`🤖 Providers: ${activeProviders}`);
+  console.log("📡 Git: Phase 3 will add auto-branch + MR generation");
   console.log("");
   console.log("📖 Usage:");
   console.log('  Ask questions: "What does payment-isolate do in swells?"');
