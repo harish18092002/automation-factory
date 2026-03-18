@@ -340,6 +340,26 @@
       "lintScript": "npm run lint",
       "testScript": "npm test",
       "description": "fairShare (fairShare) — node unknown monorepo with 0 services"
+    },
+    "one-page-portfolio": {
+      "path": "/Users/harishanantharaj/Desktop/coding/one-page-portfolio",
+      "contextMd": "./AGENT_CONTEXT.md",
+      "type": "node-unknown-monorepo",
+      "runtime": "node",
+      "buildSystem": "npm",
+      "srcDir": "src",
+      "services": [
+        "app",
+        "assets"
+      ],
+      "sharedLibs": [],
+      "sharedLibScope": "@one-page-portfolio",
+      "envFile": ".env",
+      "gitRemote": "https://github.com/harish18092002/one-page-portfolio.git",
+      "buildScript": "npm run build",
+      "lintScript": "npm run lint",
+      "testScript": "npm test",
+      "description": "one-page-portfolio (one-page-portfolio) — node unknown monorepo with 2 services"
     }
   }
 }
