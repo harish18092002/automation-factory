@@ -273,7 +273,7 @@ Checks:
   bun.lockb / bun.lock?     → runtime = "bun" (else "node")
   package.json?             → extract name, detect nx/bun build system
   nest-cli.json?            → framework = "nestjs"
-  tsconfig.base.json?       → detect lib scope (@company, surfboard, etc.)
+  tsconfig.base.json?       → detect lib scope (@my-org/lib or myorg:lib style)
   apps/ directory exists?   → srcDir = "apps" (else "src")
   libs/ directory exists?   → enumerate shared libs
 

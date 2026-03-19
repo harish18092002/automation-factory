@@ -1,4 +1,4 @@
-import { App } from "@slack/bolt";
+import { App, SocketModeReceiver } from "@slack/bolt";
 import OpenAI from "openai";
 import path from "path";
 import fs from "fs/promises";
@@ -49,10 +49,19 @@ function consumePendingTask(taskId: string): { intent: ParsedIntent; channelId: 
 }
 
 // ── Slack App (Socket Mode — no public URL required) ───────────────────────
+// Create the receiver manually so we can increase the ping-pong timeout.
+// The default 5 s clientPingTimeout causes rapid reconnect loops on higher-
+// latency or occasionally lossy connections.  30 s is more tolerant.
+const socketReceiver = new SocketModeReceiver({
+  appToken: process.env.SLACK_APP_TOKEN!,
+});
+// Patch the timeout on the already-constructed SocketModeClient instance.
+// This value is read each time a new WebSocket is opened (on connect / reconnect).
+(socketReceiver.client as unknown as { clientPingTimeoutMS: number }).clientPingTimeoutMS = 30_000;
+
 const app = new App({
   token: process.env.SLACK_BOT_TOKEN!,
-  appToken: process.env.SLACK_APP_TOKEN!,
-  socketMode: true,
+  receiver: socketReceiver,
 });
 
 // Intent parsing uses Groq (fastest/cheapest) or DeepSeek as fallback.
