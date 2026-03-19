@@ -106,9 +106,12 @@ export async function detectProject(
   let sharedLibScope: string = `@${alias}`;
   const tsconfigRaw = await safeRead(path.join(absPath, "tsconfig.base.json"));
   if (tsconfigRaw) {
-    if (tsconfigRaw.includes("surfboard:")) {
-      sharedLibScope = "surfboard";
+    // Detect bare-word colon prefix style (e.g. "myorg:lib-name" → scope = "myorg")
+    const bareColonMatch = tsconfigRaw.match(/"([^"@][^":]+):[^/]/);
+    if (bareColonMatch) {
+      sharedLibScope = bareColonMatch[1];
     } else {
+      // Detect @scope/ style (e.g. "@my-org/logger" → scope = "@my-org")
       const scopeMatch = tsconfigRaw.match(/"(@[^/"]+)\//);
       if (scopeMatch) sharedLibScope = scopeMatch[1];
     }
@@ -175,10 +178,11 @@ function generateAgentContext(alias: string, config: RepoEntry): string {
       ? `\n| ... and ${config.services.length - 20} more | - | - |`
       : "";
 
-  const importStyle =
-    config.sharedLibScope === "surfboard"
-      ? `import { ... } from 'surfboard:<lib-name>';`
-      : `import { ... } from '${config.sharedLibScope}/<lib-name>';`;
+  // Bare-word scopes use colon-style imports (e.g. "acme:lib"), @scoped use slash (e.g. "@acme/lib")
+  const scope = config.sharedLibScope ?? `@${alias}`;
+  const importStyle = scope.startsWith("@")
+    ? `import { ... } from '${scope}/<lib-name>';`
+    : `import { ... } from '${scope}:<lib-name>';`;
 
   const entryFile = config.runtime === "bun" ? "index.ts" : "main.ts";
 

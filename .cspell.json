@@ -34,6 +34,8 @@
     "ANALYSE",
     "SUMMARISE",
     "Tavily",
-    "mpim"
+    "mpim",
+    "myorg",
+    "acme"
   ]
 }
