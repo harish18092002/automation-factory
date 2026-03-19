@@ -54,8 +54,8 @@ Edit `.env` with your keys:
 SLACK_BOT_TOKEN=xoxb-...
 SLACK_APP_TOKEN=xapp-...
 
-# LLM providers — set IS_PERSONAL=yes to use these, or leave unset to use Claude CLI only
-IS_PERSONAL=yes
+# LLM providers — set IS_OPEN_SOURCE_MODE=yes to use these, or leave unset to use Claude CLI only
+IS_OPEN_SOURCE_MODE=yes
 ANTHROPIC_API_KEY=sk-ant-...
 DEEPSEEK_API_KEY=sk-...
 GROQ_API_KEY=gsk_...
@@ -65,7 +65,7 @@ GEMINI_API_KEY=AIza...
 TAVILY_API_KEY=tvly-...
 ```
 
-If `IS_PERSONAL=no` (or unset), the bot routes all tasks through Claude CLI (your local
+If `IS_OPEN_SOURCE_MODE=no` (or unset), the bot routes all tasks through Claude CLI (your local
 Claude Code installation). No API keys required — uses your Claude subscription.
 
 ---
@@ -91,6 +91,7 @@ Send this message to the bot in Slack:
 ```
 
 The bot will:
+
 1. Detect the project type (NestJS, Next.js, Express, Bun, etc.)
 2. Scan services and shared libs
 3. Generate an `AGENT_CONTEXT.md` in the repo root
@@ -195,11 +196,11 @@ automation-factories/
 
 ## Provider Routing
 
-| Condition | Provider Used |
-|---|---|
-| `IS_PERSONAL=no` or unset | Claude CLI (your subscription) |
-| Quick question/routing | Groq `llama-3.1-8b-instant` (ultra-fast) |
-| Research / implement | DeepSeek `deepseek-chat` |
-| DeepSeek unavailable | Groq `llama-3.3-70b-versatile` |
-| Context > 80K tokens | Gemini `gemini-2.0-flash` |
-| All API providers fail | Claude CLI fallback |
+| Condition                         | Provider Used                            |
+| --------------------------------- | ---------------------------------------- |
+| `IS_OPEN_SOURCE_MODE=no` or unset | Claude CLI (your subscription)           |
+| Quick question/routing            | Groq `llama-3.1-8b-instant` (ultra-fast) |
+| Research / implement              | DeepSeek `deepseek-chat`                 |
+| DeepSeek unavailable              | Groq `llama-3.3-70b-versatile`           |
+| Context > 80K tokens              | Gemini `gemini-2.0-flash`                |
+| All API providers fail            | Claude CLI fallback                      |

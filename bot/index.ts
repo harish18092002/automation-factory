@@ -19,17 +19,29 @@ for (const key of REQUIRED_ENV) {
     process.exit(1);
   }
 }
-if (!process.env.GROQ_API_KEY && !process.env.DEEPSEEK_API_KEY && !process.env.GEMINI_API_KEY) {
-  console.warn("⚠️  No AI provider API keys found. Set GROQ_API_KEY, DEEPSEEK_API_KEY, or GEMINI_API_KEY. Falling back to Claude CLI.");
+if (
+  !process.env.GROQ_API_KEY &&
+  !process.env.DEEPSEEK_API_KEY &&
+  !process.env.GEMINI_API_KEY
+) {
+  console.warn(
+    "⚠️  No AI provider API keys found. Set GROQ_API_KEY, DEEPSEEK_API_KEY, or GEMINI_API_KEY. Falling back to Claude CLI.",
+  );
 }
 
 // ── Pending tasks awaiting confirm (approve/cancel buttons) ────────────────
 // TTL map: each entry has a cleanup timer to prevent indefinite accumulation
 const PENDING_TASK_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const pendingTaskTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const pendingTasks = new Map<string, { intent: ParsedIntent; channelId: string; threadTs: string }>();
+const pendingTasks = new Map<
+  string,
+  { intent: ParsedIntent; channelId: string; threadTs: string }
+>();
 
-function storePendingTask(taskId: string, value: { intent: ParsedIntent; channelId: string; threadTs: string }): void {
+function storePendingTask(
+  taskId: string,
+  value: { intent: ParsedIntent; channelId: string; threadTs: string },
+): void {
   pendingTasks.set(taskId, value);
   const timer = setTimeout(() => {
     pendingTasks.delete(taskId);
@@ -38,12 +50,17 @@ function storePendingTask(taskId: string, value: { intent: ParsedIntent; channel
   pendingTaskTimers.set(taskId, timer);
 }
 
-function consumePendingTask(taskId: string): { intent: ParsedIntent; channelId: string; threadTs: string } | undefined {
+function consumePendingTask(
+  taskId: string,
+): { intent: ParsedIntent; channelId: string; threadTs: string } | undefined {
   const value = pendingTasks.get(taskId);
   if (value !== undefined) {
     pendingTasks.delete(taskId);
     const timer = pendingTaskTimers.get(taskId);
-    if (timer) { clearTimeout(timer); pendingTaskTimers.delete(taskId); }
+    if (timer) {
+      clearTimeout(timer);
+      pendingTaskTimers.delete(taskId);
+    }
   }
   return value;
 }
@@ -57,7 +74,9 @@ const socketReceiver = new SocketModeReceiver({
 });
 // Patch the timeout on the already-constructed SocketModeClient instance.
 // This value is read each time a new WebSocket is opened (on connect / reconnect).
-(socketReceiver.client as unknown as { clientPingTimeoutMS: number }).clientPingTimeoutMS = 30_000;
+(
+  socketReceiver.client as unknown as { clientPingTimeoutMS: number }
+).clientPingTimeoutMS = 30_000;
 
 const app = new App({
   token: process.env.SLACK_BOT_TOKEN!,
@@ -65,19 +84,43 @@ const app = new App({
 });
 
 // Intent parsing uses Groq (fastest/cheapest) or DeepSeek as fallback.
-// In non-personal mode (IS_PERSONAL !== 'yes') no API keys are used — returns no client
+// In non-personal mode (IS_OPEN_SOURCE_MODE !== 'yes') no API keys are used — returns no client
 // so parseIntent falls back to classifier result and the agent loop uses Claude CLI.
 function getIntentClient(): { client: OpenAI; model: string } {
-  if (process.env.IS_PERSONAL !== 'yes') {
-    return { client: new OpenAI({ apiKey: "placeholder", baseURL: "https://api.groq.com/openai/v1" }), model: "" };
+  if (process.env.IS_OPEN_SOURCE_MODE !== "yes") {
+    return {
+      client: new OpenAI({
+        apiKey: "placeholder",
+        baseURL: "https://api.groq.com/openai/v1",
+      }),
+      model: "",
+    };
   }
   if (process.env.GROQ_API_KEY) {
-    return { client: new OpenAI({ apiKey: process.env.GROQ_API_KEY, baseURL: "https://api.groq.com/openai/v1" }), model: "llama-3.1-8b-instant" };
+    return {
+      client: new OpenAI({
+        apiKey: process.env.GROQ_API_KEY,
+        baseURL: "https://api.groq.com/openai/v1",
+      }),
+      model: "llama-3.1-8b-instant",
+    };
   }
   if (process.env.DEEPSEEK_API_KEY) {
-    return { client: new OpenAI({ apiKey: process.env.DEEPSEEK_API_KEY, baseURL: "https://api.deepseek.com" }), model: "deepseek-chat" };
+    return {
+      client: new OpenAI({
+        apiKey: process.env.DEEPSEEK_API_KEY,
+        baseURL: "https://api.deepseek.com",
+      }),
+      model: "deepseek-chat",
+    };
   }
-  return { client: new OpenAI({ apiKey: "placeholder", baseURL: "https://api.groq.com/openai/v1" }), model: "" };
+  return {
+    client: new OpenAI({
+      apiKey: "placeholder",
+      baseURL: "https://api.groq.com/openai/v1",
+    }),
+    model: "",
+  };
 }
 
 // ── Intent types ───────────────────────────────────────────────────────────
@@ -87,7 +130,14 @@ interface ParsedIntent {
   /** All repos involved (for multi-repo tasks) */
   repos: string[];
   service: string | null;
-  taskType: "feature" | "bugfix" | "refactor" | "test" | "question" | "research" | "other";
+  taskType:
+    | "feature"
+    | "bugfix"
+    | "refactor"
+    | "test"
+    | "question"
+    | "research"
+    | "other";
   executionMode: ExecutionMode;
   /** Short kebab-case label for branch names */
   description: string;
@@ -117,7 +167,7 @@ function findDirectAlias(message: string, aliases: string[]): string | null {
 async function parseIntent(
   userMessage: string,
   executionMode: ExecutionMode,
-  classifiedRepos: string[]
+  classifiedRepos: string[],
 ): Promise<ParsedIntent | null> {
   const config = await getRepoConfig();
   const repoAliases = Object.keys(config.repos);
@@ -146,7 +196,16 @@ async function parseIntent(
   if (!intentModel) {
     // No provider available — return minimal intent if we have a confirmed repo
     if (confirmedRepo) {
-      return { repo: confirmedRepo, repos: [confirmedRepo], service: null, taskType: "other", executionMode, description: "agent-task", fullTask: userMessage, needsWebSearch: false };
+      return {
+        repo: confirmedRepo,
+        repos: [confirmedRepo],
+        service: null,
+        taskType: "other",
+        executionMode,
+        description: "agent-task",
+        fullTask: userMessage,
+        needsWebSearch: false,
+      };
     }
     return null;
   }
@@ -205,7 +264,9 @@ async function parseIntent(
     }
 
     // Validate all repos in the repos array
-    raw.repos = (raw.repos ?? [raw.repo]).filter((r) => repoAliases.includes(r));
+    raw.repos = (raw.repos ?? [raw.repo]).filter((r) =>
+      repoAliases.includes(r),
+    );
     if (!raw.repos.includes(raw.repo)) raw.repos.unshift(raw.repo);
 
     return { ...raw, executionMode };
@@ -252,11 +313,16 @@ app.message(async ({ message, say, client: slackClient }: any) => {
   if (addDirMatch) {
     const repoPath = addDirMatch[1].trim();
     const alias = path.basename(repoPath);
-    await say({ text: `🔎 Detecting project at \`${repoPath}\` (alias: \`${alias}\`)...`, thread_ts: threadTs });
+    await say({
+      text: `🔎 Detecting project at \`${repoPath}\` (alias: \`${alias}\`)...`,
+      thread_ts: threadTs,
+    });
     try {
       const detected = await detectProject(alias, repoPath);
       const contextPath = path.join(repoPath, "AGENT_CONTEXT.md");
-      const existingContext = await fs.readFile(contextPath, "utf-8").catch(() => null);
+      const existingContext = await fs
+        .readFile(contextPath, "utf-8")
+        .catch(() => null);
 
       // Always write the scaffolded context first so the agent has a template to fill in
       if (!existingContext) {
@@ -306,7 +372,13 @@ app.message(async ({ message, say, client: slackClient }: any) => {
         ].join("\n");
 
         try {
-          await runAgentLoop(alias, analyzeTask, undefined, progressCallback, "implement");
+          await runAgentLoop(
+            alias,
+            analyzeTask,
+            undefined,
+            progressCallback,
+            "implement",
+          );
           await say({
             text: `✅ *Deep analysis complete for \`${alias}\`* — AGENT_CONTEXT.md is now ready. You can ask questions about this project.`,
             thread_ts: threadTs,
@@ -324,7 +396,10 @@ app.message(async ({ message, say, client: slackClient }: any) => {
         });
       }
     } catch (err) {
-      await say({ text: `❌ Registration failed: ${String(err)}`, thread_ts: threadTs });
+      await say({
+        text: `❌ Registration failed: ${String(err)}`,
+        thread_ts: threadTs,
+      });
     }
     return;
   }
@@ -333,12 +408,17 @@ app.message(async ({ message, say, client: slackClient }: any) => {
   const regMatch = msgText.match(REGISTRATION_RE);
   if (regMatch) {
     const [, alias, repoPath] = regMatch;
-    await say({ text: `🔎 Detecting project at \`${repoPath}\`...`, thread_ts: threadTs });
+    await say({
+      text: `🔎 Detecting project at \`${repoPath}\`...`,
+      thread_ts: threadTs,
+    });
     try {
       const detected = await detectProject(alias, repoPath);
       // Write AGENT_CONTEXT.md to the repo (use top-level fs and path imports)
       const contextPath = path.join(repoPath, "AGENT_CONTEXT.md");
-      const existingContext = await fs.readFile(contextPath, "utf-8").catch(() => null);
+      const existingContext = await fs
+        .readFile(contextPath, "utf-8")
+        .catch(() => null);
       if (!existingContext) {
         await fs.writeFile(contextPath, detected.agentContextMd, "utf-8");
       }
@@ -382,9 +462,16 @@ app.message(async ({ message, say, client: slackClient }: any) => {
   // Step 2: Parse full intent (haiku, ~200ms)
   let intent: ParsedIntent | null;
   try {
-    intent = await parseIntent(msgText, classification.executionMode, classification.repos);
+    intent = await parseIntent(
+      msgText,
+      classification.executionMode,
+      classification.repos,
+    );
   } catch (err) {
-    await say({ text: `❌ Intent parsing failed: ${String(err)}`, thread_ts: threadTs });
+    await say({
+      text: `❌ Intent parsing failed: ${String(err)}`,
+      thread_ts: threadTs,
+    });
     return;
   }
 
@@ -397,10 +484,10 @@ app.message(async ({ message, say, client: slackClient }: any) => {
         `*Available repos:* \`${aliases.join("`, `")}\``,
         "",
         "*Example requests:*",
-        "• _\"In the my-api repo, add a GET /health endpoint to user-service\"_",
-        "• _\"What does auth-service do in my-api?\"_",
-        "• _\"Fix the null-check bug in my-api payment-service\"_",
-        "• _\"/add-dir /path/to/your/repo\"_",
+        '• _"In the my-api repo, add a GET /health endpoint to user-service"_',
+        '• _"What does auth-service do in my-api?"_',
+        '• _"Fix the null-check bug in my-api payment-service"_',
+        '• _"/add-dir /path/to/your/repo"_',
       ].join("\n"),
       thread_ts: threadTs,
     });
@@ -419,7 +506,14 @@ app.message(async ({ message, say, client: slackClient }: any) => {
   await say({
     text: [
       `✅ *${modeLabel[intent.executionMode]}*`,
-      `• Repo: \`${intent.repo}\`${isMultiRepo ? ` + ${intent.repos.filter((r) => r !== intent.repo).map((r) => `\`${r}\``).join(", ")}` : ""}`,
+      `• Repo: \`${intent.repo}\`${
+        isMultiRepo
+          ? ` + ${intent.repos
+              .filter((r) => r !== intent.repo)
+              .map((r) => `\`${r}\``)
+              .join(", ")}`
+          : ""
+      }`,
       `• Service: \`${intent.service ?? "repo-wide"}\``,
       `• Type: \`${intent.taskType}\``,
       "",
@@ -428,8 +522,8 @@ app.message(async ({ message, say, client: slackClient }: any) => {
       intent.executionMode === "question"
         ? "⚡ Answering..."
         : intent.executionMode === "research"
-        ? "🔬 Researching codebase..."
-        : "🔬 Analyzing codebase — will show plan for approval before making changes...",
+          ? "🔬 Researching codebase..."
+          : "🔬 Analyzing codebase — will show plan for approval before making changes...",
     ].join("\n"),
     thread_ts: threadTs,
   });
@@ -448,7 +542,13 @@ app.message(async ({ message, say, client: slackClient }: any) => {
   if (!isMultiRepo) {
     // Implement mode: research → show plan → wait for approval → execute
     if (intent.executionMode === "implement") {
-      await runPlanAndConfirm(intent, channelId, threadTs, progressCallback, slackClient);
+      await runPlanAndConfirm(
+        intent,
+        channelId,
+        threadTs,
+        progressCallback,
+        slackClient,
+      );
       return;
     }
 
@@ -460,19 +560,26 @@ app.message(async ({ message, say, client: slackClient }: any) => {
         intent.fullTask,
         intent.service ?? undefined,
         progressCallback,
-        intent.executionMode
+        intent.executionMode,
       );
     } catch (err) {
-      await say({ text: `❌ *Agent error*: ${String(err)}`, thread_ts: threadTs });
+      await say({
+        text: `❌ *Agent error*: ${String(err)}`,
+        thread_ts: threadTs,
+      });
       return;
     }
 
     await say({
       text: [
-        intent.executionMode === "question" ? "💬 *Answer*" : "✅ *Research Complete*",
+        intent.executionMode === "question"
+          ? "💬 *Answer*"
+          : "✅ *Research Complete*",
         "",
         agentResult,
-      ].filter(Boolean).join("\n"),
+      ]
+        .filter(Boolean)
+        .join("\n"),
       thread_ts: threadTs,
       mrkdwn: true,
     });
@@ -481,7 +588,7 @@ app.message(async ({ message, say, client: slackClient }: any) => {
 
   // ── Multi-repo execution (sequential, primary repo first) ─────────────────
   await progressCallback(
-    `🔀 *Multi-repo task* — running on ${intent.repos.map((r) => `\`${r}\``).join(" → ")}`
+    `🔀 *Multi-repo task* — running on ${intent.repos.map((r) => `\`${r}\``).join(" → ")}`,
   );
 
   const results: Array<{ repo: string; result: string; error?: string }> = [];
@@ -493,7 +600,7 @@ app.message(async ({ message, say, client: slackClient }: any) => {
         intent.fullTask,
         repoAlias === intent.repo ? (intent.service ?? undefined) : undefined,
         progressCallback,
-        intent.executionMode
+        intent.executionMode,
       );
       results.push({ repo: repoAlias, result });
     } catch (err) {
@@ -505,7 +612,7 @@ app.message(async ({ message, say, client: slackClient }: any) => {
     .map(({ repo, result, error }) =>
       error
         ? `### \`${repo}\`\n❌ Error: ${error}`
-        : `### \`${repo}\`\n${result}`
+        : `### \`${repo}\`\n${result}`,
     )
     .join("\n\n---\n\n");
 
@@ -532,7 +639,7 @@ async function runPlanAndConfirm(
   threadTs: string,
   progressCallback: (update: string) => Promise<void>,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  slackClient: any
+  slackClient: any,
 ): Promise<void> {
   const planTask = [
     `PLANNING PHASE — analyze the codebase only. Do NOT write any files yet.`,
@@ -558,7 +665,7 @@ async function runPlanAndConfirm(
       planTask,
       intent.service ?? undefined,
       progressCallback,
-      "research"
+      "research",
     );
   } catch (err) {
     await progressCallback(`❌ Planning failed: ${String(err)}`);
@@ -569,7 +676,8 @@ async function runPlanAndConfirm(
   storePendingTask(taskId, { intent, channelId, threadTs });
 
   // Slack block text has a 3000 char limit
-  const planText = plan.length > 2800 ? plan.slice(0, 2800) + "\n…(truncated)" : plan;
+  const planText =
+    plan.length > 2800 ? plan.slice(0, 2800) + "\n…(truncated)" : plan;
 
   try {
     await slackClient.chat.postMessage({
@@ -579,7 +687,10 @@ async function runPlanAndConfirm(
       blocks: [
         {
           type: "section",
-          text: { type: "mrkdwn", text: `📋 *Implementation Plan*\n\n${planText}` },
+          text: {
+            type: "mrkdwn",
+            text: `📋 *Implementation Plan*\n\n${planText}`,
+          },
         },
         {
           type: "actions",
@@ -587,14 +698,22 @@ async function runPlanAndConfirm(
           elements: [
             {
               type: "button",
-              text: { type: "plain_text", text: "✅ Approve & Implement", emoji: true },
+              text: {
+                type: "plain_text",
+                text: "✅ Approve & Implement",
+                emoji: true,
+              },
               style: "primary",
               action_id: "approve_task",
               value: taskId,
             },
             {
               type: "button",
-              text: { type: "plain_text", text: "💬 Add Extra Context", emoji: true },
+              text: {
+                type: "plain_text",
+                text: "💬 Add Extra Context",
+                emoji: true,
+              },
               action_id: "add_context",
               value: taskId,
             },
@@ -610,7 +729,10 @@ async function runPlanAndConfirm(
       ],
     });
   } catch (err) {
-    console.error(`[${new Date().toISOString()}] Slack postMessage error (plan+confirm):`, String(err));
+    console.error(
+      `[${new Date().toISOString()}] Slack postMessage error (plan+confirm):`,
+      String(err),
+    );
   }
 }
 
@@ -625,9 +747,17 @@ app.action("approve_task", async ({ body, ack, client: slackClient }: any) => {
   const { intent, channelId, threadTs } = pending;
   const progressCallback = async (update: string): Promise<void> => {
     try {
-      await slackClient.chat.postMessage({ channel: channelId, thread_ts: threadTs, text: update, mrkdwn: true });
+      await slackClient.chat.postMessage({
+        channel: channelId,
+        thread_ts: threadTs,
+        text: update,
+        mrkdwn: true,
+      });
     } catch (e) {
-      console.error(`[${new Date().toISOString()}] Slack postMessage error (progress):`, String(e));
+      console.error(
+        `[${new Date().toISOString()}] Slack postMessage error (progress):`,
+        String(e),
+      );
     }
   };
 
@@ -638,17 +768,27 @@ app.action("approve_task", async ({ body, ack, client: slackClient }: any) => {
       intent.fullTask,
       intent.service ?? undefined,
       progressCallback,
-      "implement"
+      "implement",
     );
     try {
       await slackClient.chat.postMessage({
         channel: channelId,
         thread_ts: threadTs,
-        text: ["✅ *Task Complete*", "", result, "", "---", "📝 *Next step*: review changes, commit & push."].join("\n"),
+        text: [
+          "✅ *Task Complete*",
+          "",
+          result,
+          "",
+          "---",
+          "📝 *Next step*: review changes, commit & push.",
+        ].join("\n"),
         mrkdwn: true,
       });
     } catch (e) {
-      console.error(`[${new Date().toISOString()}] Slack postMessage error (task complete):`, String(e));
+      console.error(
+        `[${new Date().toISOString()}] Slack postMessage error (task complete):`,
+        String(e),
+      );
     }
   } catch (err) {
     try {
@@ -658,7 +798,10 @@ app.action("approve_task", async ({ body, ack, client: slackClient }: any) => {
         text: `❌ *Agent error*: ${String(err)}`,
       });
     } catch (e) {
-      console.error(`[${new Date().toISOString()}] Slack postMessage error (agent error):`, String(e));
+      console.error(
+        `[${new Date().toISOString()}] Slack postMessage error (agent error):`,
+        String(e),
+      );
     }
   }
 });
@@ -684,7 +827,10 @@ app.action("add_context", async ({ body, ack, client: slackClient }: any) => {
       blocks: [
         {
           type: "section",
-          text: { type: "mrkdwn", text: "What's missing or incorrect in the plan? Your input will be added to the task and the agent will re-analyze." },
+          text: {
+            type: "mrkdwn",
+            text: "What's missing or incorrect in the plan? Your input will be added to the task and the agent will re-analyze.",
+          },
         },
         {
           type: "input",
@@ -707,29 +853,44 @@ app.action("add_context", async ({ body, ack, client: slackClient }: any) => {
 
 // ── Modal submission: re-run planning with extra context ───────────────────
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-app.view("add_context_modal", async ({ body, ack, client: slackClient }: any) => {
-  await ack();
-  const taskId = body.view.private_metadata as string;
-  const pending = consumePendingTask(taskId);
-  if (!pending) return; // already handled
+app.view(
+  "add_context_modal",
+  async ({ body, ack, client: slackClient }: any) => {
+    await ack();
+    const taskId = body.view.private_metadata as string;
+    const pending = consumePendingTask(taskId);
+    if (!pending) return; // already handled
 
-  const extraContext = (body.view.state.values.context_input?.context_text?.value ?? "") as string;
+    const extraContext = (body.view.state.values.context_input?.context_text
+      ?.value ?? "") as string;
 
-  const { intent, channelId, threadTs } = pending;
+    const { intent, channelId, threadTs } = pending;
 
-  // Append extra context to the task so the agent uses it in re-analysis
-  const updatedIntent: ParsedIntent = {
-    ...intent,
-    fullTask: `${intent.fullTask}\n\n## Additional Context (from user)\n${extraContext}`,
-  };
+    // Append extra context to the task so the agent uses it in re-analysis
+    const updatedIntent: ParsedIntent = {
+      ...intent,
+      fullTask: `${intent.fullTask}\n\n## Additional Context (from user)\n${extraContext}`,
+    };
 
-  const progressCallback = async (update: string): Promise<void> => {
-    await slackClient.chat.postMessage({ channel: channelId, thread_ts: threadTs, text: update, mrkdwn: true });
-  };
+    const progressCallback = async (update: string): Promise<void> => {
+      await slackClient.chat.postMessage({
+        channel: channelId,
+        thread_ts: threadTs,
+        text: update,
+        mrkdwn: true,
+      });
+    };
 
-  await progressCallback("🔄 Re-analyzing with additional context...");
-  await runPlanAndConfirm(updatedIntent, channelId, threadTs, progressCallback, slackClient);
-});
+    await progressCallback("🔄 Re-analyzing with additional context...");
+    await runPlanAndConfirm(
+      updatedIntent,
+      channelId,
+      threadTs,
+      progressCallback,
+      slackClient,
+    );
+  },
+);
 
 // ── Button action: Cancel ──────────────────────────────────────────────────
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -746,7 +907,10 @@ app.action("cancel_task", async ({ body, ack, client: slackClient }: any) => {
       text: "🚫 Task cancelled.",
     });
   } catch (e) {
-    console.error(`[${new Date().toISOString()}] Slack postMessage error (cancel):`, String(e));
+    console.error(
+      `[${new Date().toISOString()}] Slack postMessage error (cancel):`,
+      String(e),
+    );
   }
 });
 
@@ -759,7 +923,9 @@ app.action("cancel_task", async ({ body, ack, client: slackClient }: any) => {
     process.env.GEMINI_API_KEY && "Gemini Flash (T2)",
     process.env.GROQ_API_KEY && "Groq (T3)",
     "Claude CLI (T4 fallback)",
-  ].filter(Boolean).join(", ");
+  ]
+    .filter(Boolean)
+    .join(", ");
   console.log("⚡ Automation Factories Bot is running (Socket Mode)");
   console.log(`📦 Registered repos: ${aliases.join(", ")}`);
   console.log(`🤖 Providers: ${activeProviders}`);
@@ -767,6 +933,8 @@ app.action("cancel_task", async ({ body, ack, client: slackClient }: any) => {
   console.log("");
   console.log("📖 Usage:");
   console.log('  Ask questions: "What does auth-service do in my-api?"');
-  console.log('  Implement:     "Add a health endpoint to user-service in my-api"');
+  console.log(
+    '  Implement:     "Add a health endpoint to user-service in my-api"',
+  );
   console.log('  Register:      "/add-dir /path/to/repo"');
 })();

@@ -1,9 +1,9 @@
-import type { Provider } from './types.js';
-import { DeepSeekProvider } from './deepseek.js';
-import { GeminiProvider } from './gemini.js';
-import { GroqProvider } from './groq.js';
-import { ClaudeCLIProvider } from './claude-cli.js';
-import type { ExecutionMode } from '../classifier.js';
+import type { Provider } from "./types.js";
+import { DeepSeekProvider } from "./deepseek.js";
+import { GeminiProvider } from "./gemini.js";
+import { GroqProvider } from "./groq.js";
+import { ClaudeCLIProvider } from "./claude-cli.js";
+import type { ExecutionMode } from "../classifier.js";
 
 /**
  * Selects the best available provider based on task mode and estimated token count.
@@ -17,9 +17,9 @@ import type { ExecutionMode } from '../classifier.js';
  *   T4 Claude CLI    — last resort, always available via subscription
  */
 export class ProviderRouter {
-  static select(mode: ExecutionMode | 'route', estimatedTokens = 0): Provider {
+  static select(mode: ExecutionMode | "route", estimatedTokens = 0): Provider {
     // Non-personal / team setup: always use Claude CLI (subscription-based, no API keys)
-    if (process.env.IS_PERSONAL !== 'yes') {
+    if (process.env.IS_OPEN_SOURCE_MODE !== "yes") {
       return new ClaudeCLIProvider();
     }
 
@@ -33,8 +33,8 @@ export class ProviderRouter {
     }
 
     // T3: Fast routing / simple questions — Groq Llama 8B
-    if ((mode === 'question' || mode === 'route') && hasGroq) {
-      return new GroqProvider('fast');
+    if ((mode === "question" || mode === "route") && hasGroq) {
+      return new GroqProvider("fast");
     }
 
     // T1: Primary workhorse for implement/research — DeepSeek
@@ -44,7 +44,7 @@ export class ProviderRouter {
 
     // T3 smart: Groq 70B as DeepSeek fallback (faster, no Gemini rate limits)
     if (hasGroq) {
-      return new GroqProvider('smart');
+      return new GroqProvider("smart");
     }
 
     // T2 fallback: Gemini when neither DeepSeek nor Groq available
@@ -61,7 +61,7 @@ export class ProviderRouter {
    * Used by retry logic: attempt=0 → preferred, attempt=1 → next tier, etc.
    */
   static selectAtTier(tier: number): Provider {
-    if (process.env.IS_PERSONAL !== 'yes') {
+    if (process.env.IS_OPEN_SOURCE_MODE !== "yes") {
       return new ClaudeCLIProvider();
     }
 
@@ -71,7 +71,7 @@ export class ProviderRouter {
 
     const available: Provider[] = [];
     if (hasDeepSeek) available.push(new DeepSeekProvider());
-    if (hasGroq) available.push(new GroqProvider('smart'));
+    if (hasGroq) available.push(new GroqProvider("smart"));
     if (hasGemini) available.push(new GeminiProvider());
     available.push(new ClaudeCLIProvider()); // always available
 

@@ -38,6 +38,7 @@ You send a message in Slack. The bot:
 8. Learns from every session to improve future runs
 
 **Supported Slack inputs:**
+
 ```
 "What does payment-service do in services?"
 "Explain how datecs-acquiring is structured"
@@ -52,6 +53,7 @@ register project myapp at /Users/me/code/myapp
 ## 2. Quick Start
 
 ### Prerequisites
+
 - Node.js 18+ or Bun
 - Claude Code CLI installed (`claude` command available)
 - Slack app with Socket Mode enabled
@@ -67,6 +69,7 @@ npm start          # production
 ```
 
 ### Slack App Setup
+
 1. Create a Slack app at [api.slack.com/apps](https://api.slack.com/apps)
 2. Enable **Socket Mode** (Settings → Socket Mode)
 3. Generate an **App-Level Token** with `connections:write` scope → `SLACK_APP_TOKEN`
@@ -85,10 +88,10 @@ SLACK_BOT_TOKEN=xoxb-...         # Bot user OAuth token
 SLACK_APP_TOKEN=xapp-...         # App-level token (connections:write)
 
 # ── Mode ───────────────────────────────────────────────────────────────────
-IS_PERSONAL=yes                  # yes → use API providers (Groq/DeepSeek/Gemini)
+IS_OPEN_SOURCE_MODE=yes                  # yes → use API providers (Groq/DeepSeek/Gemini)
                                  # no  → Claude CLI only (team setup, no API keys)
 
-# ── AI Providers (only required when IS_PERSONAL=yes) ──────────────────────
+# ── AI Providers (only required when IS_OPEN_SOURCE_MODE=yes) ──────────────────────
 DEEPSEEK_API_KEY=sk-...          # T1 — Primary workhorse  ($0.28/$0.42 per M tokens)
 GEMINI_API_KEY=AIza-...          # T2 — Long context (1M)  ($0.30/$2.50 per M tokens)
 GROQ_API_KEY=gsk-...             # T3 — Fast routing        ($0.05/$0.08 per M, 14k req/day free)
@@ -101,10 +104,10 @@ BRAVE_API_KEY=BSA-...            # Web search fallback
 
 ### Minimum setup options
 
-| Setup | Required vars |
-|---|---|
-| Personal (recommended) | `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `IS_PERSONAL=yes`, at least one of `GROQ_API_KEY` / `DEEPSEEK_API_KEY` / `GEMINI_API_KEY` |
-| Team (no API keys) | `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `IS_PERSONAL=no` (Claude CLI used for everything) |
+| Setup                  | Required vars                                                                                                                           |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Personal (recommended) | `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `IS_OPEN_SOURCE_MODE=yes`, at least one of `GROQ_API_KEY` / `DEEPSEEK_API_KEY` / `GEMINI_API_KEY` |
+| Team (no API keys)     | `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `IS_OPEN_SOURCE_MODE=no` (Claude CLI used for everything)                                         |
 
 ---
 
@@ -112,20 +115,20 @@ BRAVE_API_KEY=BSA-...            # Web search fallback
 
 ### The 4 Tiers
 
-| Tier | Provider | Model | Cost | Best For |
-|------|----------|-------|------|----------|
-| **T1** | DeepSeek | `deepseek-chat` | $0.28 / $0.42 per M | implement + research (primary workhorse) |
-| **T2** | Gemini | `gemini-2.0-flash` (configurable) | $0.30 / $2.50 per M | large context tasks (>80K tokens) |
-| **T3** | Groq | `llama-3.1-8b-instant` (fast) or `llama-3.3-70b-versatile` (smart) | $0.05 / $0.08 per M | routing, classification, question answering |
-| **T4** | Claude CLI | Claude via `claude` subprocess | flat subscription | fallback (always available) |
+| Tier   | Provider   | Model                                                              | Cost                | Best For                                    |
+| ------ | ---------- | ------------------------------------------------------------------ | ------------------- | ------------------------------------------- |
+| **T1** | DeepSeek   | `deepseek-chat`                                                    | $0.28 / $0.42 per M | implement + research (primary workhorse)    |
+| **T2** | Gemini     | `gemini-2.0-flash` (configurable)                                  | $0.30 / $2.50 per M | large context tasks (>80K tokens)           |
+| **T3** | Groq       | `llama-3.1-8b-instant` (fast) or `llama-3.3-70b-versatile` (smart) | $0.05 / $0.08 per M | routing, classification, question answering |
+| **T4** | Claude CLI | Claude via `claude` subprocess                                     | flat subscription   | fallback (always available)                 |
 
 ### Routing Decision Tree
 
 ```
-IS_PERSONAL !== 'yes'
+IS_OPEN_SOURCE_MODE !== 'yes'
   └─► Claude CLI (team mode — no API keys needed)
 
-IS_PERSONAL = 'yes'
+IS_OPEN_SOURCE_MODE = 'yes'
   ├─ context > 80K tokens AND hasGemini
   │    └─► Gemini T2 (1M context window)
   │
@@ -153,6 +156,7 @@ Primary fails → Tier 1 → Tier 2 → Claude CLI
 ```
 
 Each fallback step is reported to Slack:
+
 ```
 ⚠️ Provider `gemini` error (Error: 429 status code), falling back to next tier...
 ⚠️ Tier 1 (groq) also failed, trying next...
@@ -160,14 +164,14 @@ Each fallback step is reported to Slack:
 
 ### Where Each Provider is Used
 
-| Operation | Personal Mode | Non-Personal Mode |
-|---|---|---|
-| Task classification | Groq fast (8B) | Claude CLI |
-| Intent parsing | Groq fast (8B) or DeepSeek | Direct classifier (no LLM call) |
-| Question answering | Groq fast (8B) | Claude CLI |
-| Research / planning | Groq smart (70B) or DeepSeek | Claude CLI |
-| Implementation | DeepSeek T1 → Groq smart fallback | Claude CLI |
-| Large context (>80K tokens) | Gemini T2 | Claude CLI |
+| Operation                   | Personal Mode                     | Non-Personal Mode               |
+| --------------------------- | --------------------------------- | ------------------------------- |
+| Task classification         | Groq fast (8B)                    | Claude CLI                      |
+| Intent parsing              | Groq fast (8B) or DeepSeek        | Direct classifier (no LLM call) |
+| Question answering          | Groq fast (8B)                    | Claude CLI                      |
+| Research / planning         | Groq smart (70B) or DeepSeek      | Claude CLI                      |
+| Implementation              | DeepSeek T1 → Groq smart fallback | Claude CLI                      |
+| Large context (>80K tokens) | Gemini T2                         | Claude CLI                      |
 
 ---
 
@@ -253,14 +257,17 @@ User message
 ## 6. Adding a New Project (`/add-dir`)
 
 ### Usage
+
 ```
 /add-dir /absolute/path/to/project
 ```
 
 The alias is automatically derived from the directory name:
+
 - `/Users/me/code/my-services` → alias = `my-services`
 
 To use a custom alias, use the longer form:
+
 ```
 register project myalias at /absolute/path/to/project
 ```
@@ -268,6 +275,7 @@ register project myalias at /absolute/path/to/project
 ### What Happens
 
 **Step 1 — Structural Detection** (`agent/project-detector.ts`)
+
 ```
 Checks:
   bun.lockb / bun.lock?     → runtime = "bun" (else "node")
@@ -283,13 +291,16 @@ Produces config entry:
 ```
 
 **Step 2 — Scaffold AGENT_CONTEXT.md**
+
 - Written to `{repoPath}/AGENT_CONTEXT.md` if not already present
 - Contains `<<CONFIRM>>` placeholders for service descriptions, ports, etc.
 
 **Step 3 — Register in `agent/repos.config.json`**
+
 - Available immediately for all future Slack requests
 
 **Step 4 — Deep Analysis** (only for `/add-dir`, only if no existing context)
+
 - Runs a full agent loop in implement mode with task:
   > "Read README, package.json, service entry points, and rewrite AGENT_CONTEXT.md replacing all <<CONFIRM>> placeholders with real information"
 - Agent reads actual code and fills in:
@@ -299,6 +310,7 @@ Produces config entry:
 - Writes updated AGENT_CONTEXT.md to repo root
 
 **Step 5 — Report to Slack**
+
 ```
 ✅ Project registered: `my-services`
 • runtime=bun, framework=nestjs, services=12, sharedLibs=5
@@ -317,6 +329,7 @@ Every implement task goes through a two-phase flow — the agent never writes co
 ### Phase 1: Planning (read-only research)
 
 The agent runs in `research` mode with this injected task:
+
 ```
 PLANNING PHASE — analyze the codebase only. Do NOT write any files yet.
 Task: <your original message>
@@ -348,11 +361,13 @@ Produce a structured plan:
 ### Button Actions
 
 **✅ Approve & Implement**
+
 - Runs full agent loop (implement mode, 12 iterations)
 - Posts progress to thread as it works
 - Verifies build/lint, commits, pushes, posts MR link
 
 **💬 Add Extra Context**
+
 - Opens a Slack modal dialog
 - You type what's missing or wrong with the plan
   - _"The update route should also validate the email field"_
@@ -362,6 +377,7 @@ Produce a structured plan:
 - Shows a new plan with buttons — repeat until satisfied
 
 **❌ Cancel**
+
 - Posts exactly one "🚫 Task cancelled." (duplicate clicks silently ignored)
 - Removes task from memory — cannot be un-cancelled
 
@@ -412,21 +428,23 @@ function runAgentLoop(repo, task, service, mode):
 
 ### Iteration Limits and Token Budgets
 
-| Mode | Max Iterations | Max Output Tokens | Purpose |
-|------|---------------|-------------------|---------|
-| question | 5 | 2,048 | Quick answers |
-| research | 8 | 4,096 | Analysis, planning |
-| implement | 12 | 8,096 | Full implementation |
+| Mode      | Max Iterations | Max Output Tokens | Purpose             |
+| --------- | -------------- | ----------------- | ------------------- |
+| question  | 5              | 2,048             | Quick answers       |
+| research  | 8              | 4,096             | Analysis, planning  |
+| implement | 12             | 8,096             | Full implementation |
 
 ### Workflow Instructions (injected into system prompt per mode)
 
 **Question mode:**
+
 1. DISCOVER — `list_directory(".")` to see structure
 2. LOCATE — `search_files` for relevant files
 3. READ — `read_file` target files
 4. ANSWER — based only on what you read, no hallucination
 
 **Research mode:**
+
 1. DISCOVER — `list_directory` on root + target service dir
 2. LOCATE — `search_files`, try multiple keywords if first fails
 3. READ — entry point, module file, 2–3 key implementation files
@@ -434,6 +452,7 @@ function runAgentLoop(repo, task, service, mode):
 5. SUMMARISE — purpose, key files, patterns
 
 **Implement mode:**
+
 1. DISCOVER — `list_directory` on root + target service
 2. EXPLORE — read entry points, find existing similar implementations
 3. PLAN — state plan explicitly before writing any file
@@ -445,14 +464,14 @@ function runAgentLoop(repo, task, service, mode):
 
 Every tool call is streamed to the Slack thread:
 
-| Tool | Behavior |
-|------|----------|
-| `read_file` | Batched: accumulated, posted as "📂 Reading files (N): ..." every 5 reads |
-| `list_directory` | Posted immediately: `📁 list_directory services/.` |
-| `search_files` | Posted immediately: `🔍 search_files \`customer update\` in services/apps` |
-| `write_file` | Posted immediately: `✍️ write_file services/apps/customer-service/src/...` |
-| `run_command` | Posted immediately: `⚡ run_command \`npm run build\`` |
-| `git_*` | Posted immediately: `🌱 git_create_branch services` |
+| Tool             | Behavior                                                                   |
+| ---------------- | -------------------------------------------------------------------------- |
+| `read_file`      | Batched: accumulated, posted as "📂 Reading files (N): ..." every 5 reads  |
+| `list_directory` | Posted immediately: `📁 list_directory services/.`                         |
+| `search_files`   | Posted immediately: `🔍 search_files \`customer update\` in services/apps` |
+| `write_file`     | Posted immediately: `✍️ write_file services/apps/customer-service/src/...` |
+| `run_command`    | Posted immediately: `⚡ run_command \`npm run build\``                     |
+| `git_*`          | Posted immediately: `🌱 git_create_branch services`                        |
 
 ---
 
@@ -460,25 +479,26 @@ Every tool call is streamed to the Slack thread:
 
 All tools require a `repo` alias and paths relative to the repo root. All paths are validated against registered repos (no path traversal outside registered directories).
 
-| Tool | Modes | Description |
-|------|-------|-------------|
-| `read_file` | Q/R/I | Read full file content |
-| `read_file_section` | Q/R/I | Read specific line range (efficient for large files) |
-| `list_directory` | Q/R/I | List directory contents (excludes node_modules, dist, .git, .nx, .turbo, coverage) |
-| `search_files` | Q/R/I | Regex grep across repo (max 60 results, 3 per file) |
-| `git_status` | Q/R/I | Show modified files (`git status --short`) |
-| `git_diff` | Q/R/I | Show uncommitted changes |
-| `web_search` | R/I | Search web (Tavily → Brave fallback, max 3 per session) |
-| `write_file` | I only | Create or overwrite a file (creates parent dirs automatically) |
-| `run_command` | I only | Execute shell command (120s timeout, 5MB buffer) |
-| `git_create_branch` | I only | Create and checkout a new branch |
-| `git_commit` | I only | Stage specific files and commit (never `git add -A`) |
+| Tool                | Modes  | Description                                                                        |
+| ------------------- | ------ | ---------------------------------------------------------------------------------- |
+| `read_file`         | Q/R/I  | Read full file content                                                             |
+| `read_file_section` | Q/R/I  | Read specific line range (efficient for large files)                               |
+| `list_directory`    | Q/R/I  | List directory contents (excludes node_modules, dist, .git, .nx, .turbo, coverage) |
+| `search_files`      | Q/R/I  | Regex grep across repo (max 60 results, 3 per file)                                |
+| `git_status`        | Q/R/I  | Show modified files (`git status --short`)                                         |
+| `git_diff`          | Q/R/I  | Show uncommitted changes                                                           |
+| `web_search`        | R/I    | Search web (Tavily → Brave fallback, max 3 per session)                            |
+| `write_file`        | I only | Create or overwrite a file (creates parent dirs automatically)                     |
+| `run_command`       | I only | Execute shell command (120s timeout, 5MB buffer)                                   |
+| `git_create_branch` | I only | Create and checkout a new branch                                                   |
+| `git_commit`        | I only | Stage specific files and commit (never `git add -A`)                               |
 
 Q = question, R = research, I = implement
 
 ### Safety Blocks
 
 `run_command` blocks these patterns regardless of mode:
+
 ```
 rm -rf     git push --force    git push -f
 DROP TABLE DROP DATABASE        truncate
@@ -496,6 +516,7 @@ Three independent persistent memory layers, all stored in `data/`:
 ### Episodic Memory (`data/episodic/{repo}-{YYYY-MM}.jsonl`)
 
 Records every agent session as a stream of events:
+
 - `task_start` — description, mode
 - `tool_call` — which tool, what input
 - `task_complete` — outcome, files modified, duration, tokens used, provider
@@ -506,6 +527,7 @@ Records every agent session as a stream of events:
 ### Semantic Memory (`data/semantic/{repo}-facts.json`)
 
 Structured facts about a repo with time-decay:
+
 ```json
 {
   "factId": "uuid",
@@ -524,6 +546,7 @@ Facts are ranked by `decayScore × confidence`. Decay score multiplied by 0.95 e
 ### Skill Registry (`data/skills/{repo}-skills.json`)
 
 Validated, generalizable patterns extracted from successful sessions:
+
 ```json
 {
   "name": "NestJS retry decorator pattern",
@@ -540,6 +563,7 @@ Skills are matched by keyword overlap against the current task description. Only
 ### Memory Fragment Injection
 
 Before each agent loop, memory is queried and formatted as:
+
 ```
 ## Memory: Learned Patterns
 - When adding retry logic to NestJS services, use @Retry() decorator...
@@ -595,20 +619,25 @@ The agent sees the exact error output from each failed attempt and is instructed
 After successful verification (`agent/git/`):
 
 1. **Branch creation** (done early in implement phase):
+
    ```
    feat/add-health-endpoint-2026-03-18
    fix/null-check-payment-service-2026-03-18
    refactor/extract-shared-retry-logic-2026-03-18
    ```
+
    Prefix derived from `taskType` (feature → `feat/`, bugfix → `fix/`, etc.)
 
 2. **Stage only modified files:**
+
    ```bash
    git add -- "apps/merchant-service/src/health.controller.ts"
    ```
+
    Never `git add -A`. Files tracked from `write_file` calls during the session.
 
 3. **Commit with conventional format:**
+
    ```
    feat(merchant-service): add GET /health endpoint with uptime and version
    ```
@@ -655,7 +684,7 @@ automation/
 │   │   ├── gemini.ts               T2: Google Gemini via OpenAI-compat API.
 │   │   ├── groq.ts                 T3: Groq (8B fast / 70B smart) via OpenAI API.
 │   │   ├── claude-cli.ts           T4: Spawns `claude` CLI subprocess.
-│   │   └── router.ts               IS_PERSONAL gate + tier routing logic.
+│   │   └── router.ts               IS_OPEN_SOURCE_MODE gate + tier routing logic.
 │   │
 │   ├── memory/
 │   │   ├── memory-manager.ts       Unified query interface + session recording.
@@ -712,10 +741,11 @@ Every registered repo must have an `AGENT_CONTEXT.md` at its root. This is the m
 
 ### Minimum required structure
 
-```markdown
+````markdown
 # my-services — Claude Agent Context
 
 ## Quick Reference
+
 - **Services**: `apps/` — 15 services
 - **Shared libs**: `libs/` — scope: `@company`
 - **Build**: `npm run build`
@@ -723,37 +753,45 @@ Every registered repo must have an `AGENT_CONTEXT.md` at its root. This is the m
 - **Runtime**: node
 
 ## Purpose
+
 Microservices monorepo for the payments platform. Handles card processing,
 merchant management, and customer accounts via NestJS services.
 
 ## Absolute Path
+
 /Users/me/code/my-services
 
 ## Services
-| Service | Port | Responsibility |
-|---|---|---|
-| gateway | 3000 | API entry point, auth, rate limiting |
-| merchant-service | 3001 | Merchant CRUD, onboarding |
-| payment-service | 3002 | Card processing, refunds |
+
+| Service          | Port | Responsibility                       |
+| ---------------- | ---- | ------------------------------------ |
+| gateway          | 3000 | API entry point, auth, rate limiting |
+| merchant-service | 3001 | Merchant CRUD, onboarding            |
+| payment-service  | 3002 | Card processing, refunds             |
 
 ## Shared Libraries
+
 ```typescript
 import { ... } from '@company/<lib-name>';
 // Available libs: customers, payments, common, auth
 ```
+````
 
 ## Coding Conventions
+
 - **Entry point**: `apps/<service>/src/main.ts`
 - **Imports**: Always use `@company/` path aliases — never relative cross-lib imports
 - **Build**: `npm run build` after all changes
 - **Lint**: `npm run lint` before finishing
 
 ## What Claude Must ALWAYS Do
+
 1. Read the service entry point before modifying any service
 2. Use `@company/` path aliases — never relative imports into `libs/`
 3. Run build and lint after code changes
 4. Read files before writing to existing files
-```
+
+````
 
 ### Auto-generation
 
@@ -770,13 +808,14 @@ After each successful implement session, the agent checks if new services or lib
 ## Auto-Detected Structural Changes (2026-03-18)
 - **New services**: notification-service, audit-service
 > Auto-detected breaking structural change — review Services table above.
-```
+````
 
 ---
 
 ## 15. Example: End-to-End Walk-through
 
 **User sends in Slack:**
+
 ```
 Add a PUT /customers/:id route to customer-service in services
 ```
@@ -801,7 +840,7 @@ Add a PUT /customers/:id route to customer-service in services
            → Found skill: "NestJS route pattern uses @Put(':id') decorator"
            → Found fact: "customer-service delegates persistence to customers lib"
 
-[Provider] Select: Groq 70B (IS_PERSONAL=yes, no DeepSeek available)
+[Provider] Select: Groq 70B (IS_OPEN_SOURCE_MODE=yes, no DeepSeek available)
 
 [Planning] Agent loop — research mode, 8 iterations max
   Iteration 1:
@@ -875,12 +914,12 @@ Total time: ~2–4 minutes depending on codebase size and provider speed.
 
 ## Common Issues
 
-| Issue | Cause | Fix |
-|---|---|---|
-| "Could not determine the target repo" | No repo alias found in message | Mention the alias explicitly: "in services, ..." |
-| "Agent error: 404 status code" | Wrong Gemini model name | Set `GEMINI_MODEL=gemini-2.0-flash` in `.env` |
-| "Reached max turns (1)" | Claude CLI in non-personal mode | Make sure `IS_PERSONAL` is set correctly in `.env` |
-| Infinite read loop | Model re-reading same files | Fixed via dedup set — same file returns cached hint |
-| 99 Slack messages | Old: every read posted individually | Fixed via batching — reads grouped per 5 |
-| Plan buttons stop working after restart | Pending tasks stored in-memory | Re-send your message to create a new plan |
-| `/add-dir` context is empty | AGENT_CONTEXT.md had <<CONFIRM>> placeholders | Delete the file and re-run `/add-dir` to trigger deep analysis |
+| Issue                                   | Cause                                         | Fix                                                            |
+| --------------------------------------- | --------------------------------------------- | -------------------------------------------------------------- |
+| "Could not determine the target repo"   | No repo alias found in message                | Mention the alias explicitly: "in services, ..."               |
+| "Agent error: 404 status code"          | Wrong Gemini model name                       | Set `GEMINI_MODEL=gemini-2.0-flash` in `.env`                  |
+| "Reached max turns (1)"                 | Claude CLI in non-personal mode               | Make sure `IS_OPEN_SOURCE_MODE` is set correctly in `.env`     |
+| Infinite read loop                      | Model re-reading same files                   | Fixed via dedup set — same file returns cached hint            |
+| 99 Slack messages                       | Old: every read posted individually           | Fixed via batching — reads grouped per 5                       |
+| Plan buttons stop working after restart | Pending tasks stored in-memory                | Re-send your message to create a new plan                      |
+| `/add-dir` context is empty             | AGENT_CONTEXT.md had <<CONFIRM>> placeholders | Delete the file and re-run `/add-dir` to trigger deep analysis |
