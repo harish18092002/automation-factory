@@ -129,7 +129,7 @@ export class WorkerPool {
       // Run agent — the system blocks are passed indirectly through loop.ts
       // For now we pass them as context in the task description
       const taskWithContext = `${subTask.description}\n\n${systemBlocks.at(-1)?.text ?? ''}`;
-      const output = await runAgentLoop(
+      const loopResult = await runAgentLoop(
         subTask.repoAlias,
         taskWithContext,
         subTask.serviceHint,
@@ -150,8 +150,8 @@ export class WorkerPool {
         workerId,
         subTaskId: subTask.id,
         success: true,
-        output,
-        filesModified: [],
+        output: loopResult.text,
+        filesModified: loopResult.filesModified,
         verificationStatus,
         tokensUsed: 0,
         durationMs: Date.now() - startTime,

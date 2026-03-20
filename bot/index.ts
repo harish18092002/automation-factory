@@ -6,6 +6,8 @@ import { randomUUID } from "crypto";
 import "dotenv/config";
 import { runAgentLoop } from "../agent/loop.js";
 import { getRepoConfig, getRepoAliases, addRepo } from "../agent/config.js";
+import { gitAutomation } from "../agent/git/git-automation.js";
+import type { GitFlowResult } from "../agent/types.js";
 import { classifyTask } from "../agent/classifier.js";
 import { detectProject } from "../agent/project-detector.js";
 import type { ExecutionMode } from "../agent/classifier.js";
@@ -296,6 +298,46 @@ const REGISTRATION_RE =
 // Matches: "/add-dir /absolute/path" — alias auto-derived from directory name
 const ADD_DIR_RE = /\/add-dir\s+(\/\S+)/i;
 
+// ── "List repos" command detection ────────────────────────────────────────
+// Matches: "list your repos", "what projects do you have", "show me the projects", etc.
+// Only fires when NO specific repo alias appears verbatim in the message.
+const LIST_REPOS_RE =
+  /\b(?:list|show|what|which|tell me)\b.{0,40}\b(?:repo|repos|project|projects|access|registered|available)\b/i;
+
+// ── Unregistered repo name extractor ─────────────────────────────────────
+// Extracts the repo name a user explicitly named (e.g. "my fairshare repo").
+// Returns null if the name matches a known alias or is a common word.
+function extractUnregisteredRepoMention(
+  message: string,
+  knownAliases: string[],
+): string | null {
+  // Common words that look like names but aren't repo aliases
+  const STOP_WORDS = new Set([
+    "my", "the", "our", "a", "an", "this", "that", "some", "any",
+    "new", "old", "main", "master", "dev", "test", "staging", "prod",
+    "project", "repo", "repository", "codebase", "code", "app",
+    "service", "module", "branch", "commit", "change", "update",
+  ]);
+  const lowerAliases = knownAliases.map((a) => a.toLowerCase());
+
+  // Patterns: "my fairshare repo", "in fairshare repo", "the fairshare project"
+  const patterns = [
+    /\bmy\s+([\w][\w-]*)\s+(?:repo|project|codebase|repository)\b/i,
+    /\bin\s+(?:my\s+)?([\w][\w-]*)\s+(?:repo|project|codebase|repository)\b/i,
+    /\bthe\s+([\w][\w-]*)\s+(?:repo|project|codebase|repository)\b/i,
+    /\b([\w][\w-]*)\s+(?:repo|project|repository)\b/i,
+  ];
+  for (const pattern of patterns) {
+    const match = message.match(pattern);
+    if (!match?.[1]) continue;
+    const name = match[1].toLowerCase();
+    if (STOP_WORDS.has(name)) continue;
+    if (lowerAliases.includes(name)) continue; // known alias — fine
+    return match[1]; // explicitly named but not registered
+  }
+  return null;
+}
+
 // ── Slack message handler ──────────────────────────────────────────────────
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 app.message(async ({ message, say, client: slackClient }: any) => {
@@ -446,11 +488,41 @@ app.message(async ({ message, say, client: slackClient }: any) => {
     return;
   }
 
+  // ── "List repos" fast path ───────────────────────────────────────────────
+  // Intercept before any LLM call. Only fires when no specific alias is in the message.
+  const currentAliases = await getRepoAliases();
+  const hasDirectAlias = currentAliases.some((alias) =>
+    new RegExp(`\\b${alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(msgText)
+  );
+  if (LIST_REPOS_RE.test(msgText) && !hasDirectAlias) {
+    const config = await getRepoConfig();
+    const repoLines = currentAliases.map((alias) => {
+      const r = config.repos[alias];
+      const serviceCount = r.services?.length ?? 0;
+      const remote = r.gitRemote
+        ? r.gitRemote.replace(/\.git$/, "").replace(/^git@([^:]+):/, "https://$1/")
+        : "no remote";
+      return `• \`${alias}\` — ${r.description ?? r.type}${serviceCount > 0 ? `, ${serviceCount} services` : ""}\n  Remote: ${remote}`;
+    });
+    await say({
+      text: [
+        `📦 *Registered repos (${currentAliases.length}):*`,
+        "",
+        repoLines.join("\n"),
+        "",
+        "_Register a new repo: `/add-dir /absolute/path/to/repo`_",
+      ].join("\n"),
+      thread_ts: threadTs,
+      mrkdwn: true,
+    });
+    return;
+  }
+
   // ── Normal flow ──────────────────────────────────────────────────────────
   await say({ text: "🔍 Parsing your request...", thread_ts: threadTs });
 
   // Step 1: Classify task (haiku, ~100ms, very cheap)
-  const repoAliases = await getRepoAliases();
+  const repoAliases = currentAliases;
   const classification = await classifyTask(msgText, repoAliases).catch(() => ({
     executionMode: "implement" as ExecutionMode,
     repos: [] as string[],
@@ -475,13 +547,28 @@ app.message(async ({ message, say, client: slackClient }: any) => {
     return;
   }
 
+  // Check if user explicitly named a repo that is NOT registered — before giving up or guessing
+  const unregisteredMention = extractUnregisteredRepoMention(msgText, repoAliases);
+  if (unregisteredMention) {
+    await say({
+      text: [
+        `❌ Repo \`${unregisteredMention}\` is not registered with this agent.`,
+        "",
+        `*Registered repos:* \`${repoAliases.join("`, `")}\``,
+        "",
+        `To add it: \`/add-dir /absolute/path/to/${unregisteredMention.toLowerCase()}\``,
+      ].join("\n"),
+      thread_ts: threadTs,
+    });
+    return;
+  }
+
   if (!intent) {
-    const aliases = await getRepoAliases();
     await say({
       text: [
         "❌ Could not determine the target repo from your message.",
         "",
-        `*Available repos:* \`${aliases.join("`, `")}\``,
+        `*Registered repos:* \`${repoAliases.join("`, `")}\``,
         "",
         "*Example requests:*",
         '• _"In the my-api repo, add a GET /health endpoint to user-service"_',
@@ -495,17 +582,22 @@ app.message(async ({ message, say, client: slackClient }: any) => {
   }
 
   // ── Mode-specific UI labels ──────────────────────────────────────────────
-  const modeLabel: Record<ExecutionMode, string> = {
+  const modeLabel: Record<string, string> = {
     question: "❓ Quick question",
     research: "🔬 Research",
     implement: "⚙️ Implementation",
   };
+  // Normalise executionMode — classifier may return unexpected values
+  const safeMode: ExecutionMode =
+    intent.executionMode === "question" || intent.executionMode === "research"
+      ? intent.executionMode
+      : "implement";
 
   const isMultiRepo = intent.repos.length > 1;
 
   await say({
     text: [
-      `✅ *${modeLabel[intent.executionMode]}*`,
+      `✅ *${modeLabel[safeMode]}*`,
       `• Repo: \`${intent.repo}\`${
         isMultiRepo
           ? ` + ${intent.repos
@@ -519,9 +611,9 @@ app.message(async ({ message, say, client: slackClient }: any) => {
       "",
       `📋 *Task:* ${intent.fullTask}`,
       "",
-      intent.executionMode === "question"
+      safeMode === "question"
         ? "⚡ Answering..."
-        : intent.executionMode === "research"
+        : safeMode === "research"
           ? "🔬 Researching codebase..."
           : "🔬 Analyzing codebase — will show plan for approval before making changes...",
     ].join("\n"),
@@ -541,7 +633,7 @@ app.message(async ({ message, say, client: slackClient }: any) => {
   // ── Single-repo execution ────────────────────────────────────────────────
   if (!isMultiRepo) {
     // Implement mode: research → show plan → wait for approval → execute
-    if (intent.executionMode === "implement") {
+    if (safeMode === "implement") {
       await runPlanAndConfirm(
         intent,
         channelId,
@@ -553,15 +645,16 @@ app.message(async ({ message, say, client: slackClient }: any) => {
     }
 
     // Question / Research: answer directly
-    let agentResult: string;
+    let agentResultText: string;
     try {
-      agentResult = await runAgentLoop(
+      const loopResult = await runAgentLoop(
         intent.repo,
         intent.fullTask,
         intent.service ?? undefined,
         progressCallback,
-        intent.executionMode,
+        safeMode,
       );
+      agentResultText = loopResult.text;
     } catch (err) {
       await say({
         text: `❌ *Agent error*: ${String(err)}`,
@@ -572,11 +665,11 @@ app.message(async ({ message, say, client: slackClient }: any) => {
 
     await say({
       text: [
-        intent.executionMode === "question"
+        safeMode === "question"
           ? "💬 *Answer*"
           : "✅ *Research Complete*",
         "",
-        agentResult,
+        agentResultText,
       ]
         .filter(Boolean)
         .join("\n"),
@@ -595,14 +688,14 @@ app.message(async ({ message, say, client: slackClient }: any) => {
   for (const repoAlias of intent.repos) {
     await progressCallback(`\n📦 *Working on \`${repoAlias}\`...*`);
     try {
-      const result = await runAgentLoop(
+      const loopResult = await runAgentLoop(
         repoAlias,
         intent.fullTask,
         repoAlias === intent.repo ? (intent.service ?? undefined) : undefined,
         progressCallback,
-        intent.executionMode,
+        safeMode,
       );
-      results.push({ repo: repoAlias, result });
+      results.push({ repo: repoAlias, result: loopResult.text });
     } catch (err) {
       results.push({ repo: repoAlias, result: "", error: String(err) });
     }
@@ -621,14 +714,38 @@ app.message(async ({ message, say, client: slackClient }: any) => {
       "✅ *Multi-repo Task Complete*",
       "",
       summary,
-      "",
-      "---",
-      "📝 *Next step (manual for now)*: review changes in each repo, then commit & push.",
     ].join("\n"),
     thread_ts: threadTs,
     mrkdwn: true,
   });
 });
+
+// ── Git result formatter ───────────────────────────────────────────────────
+function formatGitResult(r: GitFlowResult): string {
+  if (r.error && !r.commitSha) {
+    // No commit was made (e.g., no files modified or branch creation failed)
+    return `---\n⚠️ *Git*: ${r.error}`;
+  }
+
+  const lines: string[] = ['---'];
+
+  if (r.branchName) lines.push(`🌿 *Branch*: \`${r.branchName}\``);
+  if (r.commitSha && r.commitSha !== '') lines.push(`📦 *Commit*: \`${r.commitSha}\``);
+
+  if (r.pushedToRemote) {
+    if (r.mrUrl) {
+      const label = r.mrTitle ? `*${r.mrTitle}*` : 'Open PR/MR';
+      lines.push(`🔗 *Pull Request*: <${r.mrUrl}|${label}>`);
+    } else {
+      lines.push('✅ Pushed to remote — create a PR manually');
+    }
+  } else if (r.commitSha) {
+    // Committed locally but push failed
+    lines.push(`💾 Committed locally (push failed: ${r.error ?? 'unknown'})`);
+  }
+
+  return lines.join('\n');
+}
 
 // ── Plan + Confirm flow ────────────────────────────────────────────────────
 // Runs a read-only research pass, posts the plan with Approve/Cancel buttons,
@@ -660,13 +777,14 @@ async function runPlanAndConfirm(
 
   let plan: string;
   try {
-    plan = await runAgentLoop(
+    const planResult = await runAgentLoop(
       intent.repo,
       planTask,
       intent.service ?? undefined,
       progressCallback,
       "research",
     );
+    plan = planResult.text;
   } catch (err) {
     await progressCallback(`❌ Planning failed: ${String(err)}`);
     return;
@@ -763,13 +881,46 @@ app.action("approve_task", async ({ body, ack, client: slackClient }: any) => {
 
   await progressCallback("⚙️ Starting implementation...");
   try {
-    const result = await runAgentLoop(
+    const loopResult = await runAgentLoop(
       intent.repo,
       intent.fullTask,
       intent.service ?? undefined,
       progressCallback,
       "implement",
     );
+
+    // Git flow: branch → commit → push → open PR/MR
+    // Priority: files the agent wrote > pre-staged files in the repo
+    let gitSection = "";
+    const config = await getRepoConfig();
+    const repoEntry = config.repos[intent.repo];
+    if (repoEntry) {
+      let filesToCommit = loopResult.filesModified;
+
+      // If agent made no write_file calls, check for pre-staged changes
+      // (e.g. user ran `git add` manually and asked the agent to push)
+      if (filesToCommit.length === 0) {
+        const staged = await gitAutomation.getStagedFiles(repoEntry.path);
+        if (staged.length > 0) {
+          filesToCommit = staged;
+        }
+      }
+
+      if (filesToCommit.length > 0) {
+        await progressCallback("🔀 Running git flow (branch → commit → push)...");
+        try {
+          const gitResult = await gitAutomation.runFlow(
+            repoEntry,
+            loopResult.session,
+            filesToCommit,
+          );
+          gitSection = formatGitResult(gitResult);
+        } catch (gitErr) {
+          gitSection = `---\n⚠️ *Git flow error*: ${String(gitErr)}`;
+        }
+      }
+    }
+
     try {
       await slackClient.chat.postMessage({
         channel: channelId,
@@ -777,11 +928,10 @@ app.action("approve_task", async ({ body, ack, client: slackClient }: any) => {
         text: [
           "✅ *Task Complete*",
           "",
-          result,
+          loopResult.text,
           "",
-          "---",
-          "📝 *Next step*: review changes, commit & push.",
-        ].join("\n"),
+          gitSection,
+        ].filter(Boolean).join("\n"),
         mrkdwn: true,
       });
     } catch (e) {
@@ -916,7 +1066,24 @@ app.action("cancel_task", async ({ body, ack, client: slackClient }: any) => {
 
 // ── Start ──────────────────────────────────────────────────────────────────
 (async () => {
-  await app.start();
+  console.log("🔌 Connecting to Slack (Socket Mode)...");
+
+  // Add a timeout so a bad/expired token fails fast with a clear error
+  // instead of hanging indefinitely.
+  const CONNECT_TIMEOUT_MS = 30_000;
+  await Promise.race([
+    app.start(),
+    new Promise<never>((_, reject) =>
+      setTimeout(
+        () => reject(new Error(
+          `Slack connection timed out after ${CONNECT_TIMEOUT_MS / 1000}s.\n` +
+          `Check that SLACK_BOT_TOKEN and SLACK_APP_TOKEN in your .env are valid and not expired.`
+        )),
+        CONNECT_TIMEOUT_MS
+      )
+    ),
+  ]);
+
   const aliases = await getRepoAliases();
   const activeProviders = [
     process.env.DEEPSEEK_API_KEY && "DeepSeek (T1)",
@@ -926,15 +1093,22 @@ app.action("cancel_task", async ({ body, ack, client: slackClient }: any) => {
   ]
     .filter(Boolean)
     .join(", ");
+  const gitStatus = [
+    process.env.GITHUB_TOKEN && "GitHub PR (token set)",
+    process.env.GITLAB_TOKEN && "GitLab MR (token set)",
+    !process.env.GITHUB_TOKEN && !process.env.GITLAB_TOKEN && "URL-only (set GITHUB_TOKEN / GITLAB_TOKEN to enable auto PR/MR)",
+  ].filter(Boolean).join(", ");
+
   console.log("⚡ Automation Factories Bot is running (Socket Mode)");
   console.log(`📦 Registered repos: ${aliases.join(", ")}`);
   console.log(`🤖 Providers: ${activeProviders}`);
-  console.log("📡 Git: Phase 3 will add auto-branch + MR generation");
+  console.log(`🔀 Git: ${gitStatus}`);
   console.log("");
   console.log("📖 Usage:");
   console.log('  Ask questions: "What does auth-service do in my-api?"');
-  console.log(
-    '  Implement:     "Add a health endpoint to user-service in my-api"',
-  );
+  console.log('  Implement:     "Add a health endpoint to user-service in my-api"');
   console.log('  Register:      "/add-dir /path/to/repo"');
-})();
+})().catch((err) => {
+  console.error("❌ Failed to start bot:", String(err));
+  process.exit(1);
+});

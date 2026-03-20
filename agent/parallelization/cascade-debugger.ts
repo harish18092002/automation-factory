@@ -60,7 +60,7 @@ export async function cascadeRecover(input: CascadeInput): Promise<WorkerResult>
       const worktreeInfo = await worktreeManager.create(input.repoAlias, branchName);
 
       try {
-        const output = await runAgentLoop(
+        const loopResult = await runAgentLoop(
           input.repoAlias,
           strategy.prompt,
           input.serviceHint,
@@ -75,7 +75,7 @@ export async function cascadeRecover(input: CascadeInput): Promise<WorkerResult>
 
         return {
           strategy: strategy.name,
-          output,
+          output: loopResult.text,
           verificationStatus,
           workerId,
         };

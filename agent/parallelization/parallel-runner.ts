@@ -68,7 +68,7 @@ async function runWorker(
     const taskWithContext = buildSubtaskPrompt(subTask);
 
     // Run agent loop (using worktree path if available)
-    const output = await runAgentLoop(
+    const loopResult = await runAgentLoop(
       subTask.repoAlias,
       taskWithContext,
       subTask.serviceHint,
@@ -92,8 +92,8 @@ async function runWorker(
       workerId,
       subTaskId: subTask.id,
       success: true,
-      output,
-      filesModified: [], // Populated by agent output parsing in a future iteration
+      output: loopResult.text,
+      filesModified: loopResult.filesModified,
       verificationStatus,
       tokensUsed: 0,
       durationMs: Date.now() - startTime,

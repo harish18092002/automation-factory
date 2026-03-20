@@ -140,6 +140,14 @@ export interface GitFlowResult {
   error?: string;
 }
 
+// ── Agent Loop Result ─────────────────────────────────────────────────────────
+
+export interface AgentLoopResult {
+  text: string;
+  filesModified: string[];
+  session: AgentSession;
+}
+
 // ── Token Optimization ────────────────────────────────────────────────────────
 
 export interface TokenBudget {

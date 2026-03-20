@@ -6,7 +6,7 @@ import { type ExecutionMode } from './classifier.js';
 import { ProviderRouter } from './providers/router.js';
 import type { ProviderMessage, ProviderSystemBlock, ProviderTool } from './providers/types.js';
 import { memoryManager } from './memory/memory-manager.js';
-import type { AgentSession } from './types.js';
+import type { AgentSession, AgentLoopResult } from './types.js';
 import { detectProject } from './project-detector.js';
 
 // Iteration budgets per execution mode
@@ -109,10 +109,15 @@ export async function buildSystemPromptBlocks(
 
   const toolNames =
     executionMode === 'implement'
-      ? 'read_file, read_file_section, list_directory, search_files, write_file, run_command, git_status, git_diff, git_create_branch, git_commit, web_search'
+      ? 'read_file, read_file_section, list_directory, search_files, write_file, run_command, git_status, git_diff, web_search'
       : executionMode === 'question'
       ? 'read_file, read_file_section, list_directory, search_files, git_status, git_diff'
       : 'read_file, read_file_section, list_directory, search_files, git_status, git_diff, web_search';
+
+  // Convert SSH remote to HTTPS for display (purely informational — agent must not use this for git ops)
+  const gitRemoteDisplay = repo.gitRemote
+    ? repo.gitRemote.replace(/\.git$/, '').replace(/^git@([^:]+):/, 'https://$1/')
+    : 'not configured';
 
   // Dynamic session block — changes per request, never cache
   const sessionLines = [
@@ -123,6 +128,7 @@ export async function buildSystemPromptBlocks(
     `- **Runtime**: ${repo.runtime}`,
     `- **Build command**: \`${repo.buildScript}\``,
     `- **Lint command**: \`${repo.lintScript}\``,
+    `- **Git remote**: \`${gitRemoteDisplay}\``,
     serviceHint
       ? `- **Target service**: \`${serviceHint}\` (at \`${repo.srcDir}/${serviceHint}/\`)`
       : '- **Target service**: not specified',
@@ -134,6 +140,15 @@ export async function buildSystemPromptBlocks(
     '3. Path aliases — use the repo\'s import aliases, never relative cross-lib imports.',
     '4. No secrets — never write API keys, tokens, or credentials into source files.',
     '5. Report all changes — list every file created/modified in final response.',
+    '',
+    '## Anti-Hallucination Rules — STRICTLY ENFORCED',
+    'VIOLATION of any rule below is a critical failure:',
+    '- NEVER invent or guess URLs of any kind (PR links, MR links, API URLs, web links).',
+    '- NEVER fabricate file paths, function names, class names, or identifiers you have not read from a file.',
+    '- NEVER assume a library, framework, or pattern is used without reading a file that proves it.',
+    '- NEVER generate git remote URLs or branch URLs — the system handles all git operations automatically after your code changes.',
+    '- If you do not know something, say "I need to read X first" and use a tool. Never guess.',
+    '- Only state facts you have directly observed by calling a tool in this session.',
     '',
     WORKFLOW_INSTRUCTIONS[executionMode],
   ]
@@ -224,7 +239,7 @@ export async function runAgentLoop(
   progressCallback?: ProgressCallback,
   executionMode: ExecutionMode = 'implement',
   feedbackFromPreviousAttempt?: string
-): Promise<string> {
+): Promise<AgentLoopResult> {
   // Query memory for relevant context (skills, facts, recent sessions)
   // Errors here are non-fatal — degrade gracefully to no memory
   let memoryFragment: string | undefined;
@@ -440,5 +455,9 @@ export async function runAgentLoop(
     await maybeUpdateAgentContext(repoAlias).catch(() => {});
   }
 
-  return lastTextResponse || '*(Agent completed without producing a text summary)*';
+  return {
+    text: lastTextResponse || '*(Agent completed without producing a text summary)*',
+    filesModified,
+    session,
+  };
 }

@@ -30,11 +30,12 @@ export class MemoryManager {
       .split(/\W+/)
       .filter((w) => w.length > 3);
 
-    // Query all three memory types in parallel
+    // Query all three memory types in parallel.
+    // Each store is individually isolated — a failure in one does not kill the whole query.
     const [recentEvents, skills, facts] = await Promise.all([
-      episodicStore.queryRecent(q.repoAlias, { limit: maxEpisodic * 5, eventTypes: ['task_complete'] }),
-      skillRegistry.getSkills(q.repoAlias, keywords),
-      semanticStore.getFacts(q.repoAlias),
+      episodicStore.queryRecent(q.repoAlias, { limit: maxEpisodic * 5, eventTypes: ['task_complete'] }).catch((): EpisodicEvent[] => []),
+      skillRegistry.getSkills(q.repoAlias, keywords).catch((): Awaited<ReturnType<typeof skillRegistry.getSkills>> => []),
+      semanticStore.getFacts(q.repoAlias).catch((): Awaited<ReturnType<typeof semanticStore.getFacts>> => []),
     ]);
 
     // Filter and trim
@@ -49,7 +50,7 @@ export class MemoryManager {
     // Get unique session IDs from recent complete events
     const sessionIds = [...new Set(recentEvents.map((e) => e.sessionId))].slice(0, maxEpisodic);
     const sessionSummaries = await Promise.all(
-      sessionIds.map((id) => episodicStore.summarizeSession(id, q.repoAlias))
+      sessionIds.map((id) => episodicStore.summarizeSession(id, q.repoAlias).catch(() => ''))
     );
     const relevantSessions = recentEvents.filter((e) => sessionIds.includes(e.sessionId));
 

@@ -183,38 +183,11 @@ export const writeToolDefinitions: ProviderTool[] = [
       },
     },
   },
-  {
-    type: 'function',
-    function: {
-      name: 'git_create_branch',
-      description: 'Create a new git branch in a repo. Use before making any code changes for an implement task.',
-      parameters: {
-        type: 'object',
-        properties: {
-          repo: { type: 'string', description: 'Repo alias' },
-          branch_name: { type: 'string', description: 'Branch name (e.g. "feat/add-retry-logic-2026-03-16")' },
-        },
-        required: ['repo', 'branch_name'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'git_commit',
-      description: 'Stage specific files and create a git commit. Only stages the files you specify (never git add -A).',
-      parameters: {
-        type: 'object',
-        properties: {
-          repo: { type: 'string', description: 'Repo alias' },
-          files: { type: 'string', description: 'Space-separated list of relative file paths to stage (e.g. "apps/gateway/src/main.ts libs/shared/src/retry.ts")' },
-          message: { type: 'string', description: 'Commit message. Follow conventional commits format (feat: / fix: / refactor: / chore:)' },
-        },
-        required: ['repo', 'files', 'message'],
-      },
-    },
-  },
 ];
+// git_create_branch and git_commit are intentionally NOT in the agent tool list.
+// The system handles ALL git operations (branch, commit, push, PR/MR) automatically
+// via gitAutomation.runFlow() after the agent loop completes.
+// Giving the LLM these tools causes it to hallucinate remote URLs and bypass runFlow().
 
 /** Question-mode tools — no web_search (repo questions only need file reads) */
 export const questionToolDefinitions: ProviderTool[] = readOnlyToolDefinitions.filter(
