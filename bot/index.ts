@@ -2,12 +2,16 @@ import { App, SocketModeReceiver } from "@slack/bolt";
 import OpenAI from "openai";
 import path from "path";
 import fs from "fs/promises";
+import { exec } from "child_process";
+import { promisify } from "util";
 import { randomUUID } from "crypto";
 import "dotenv/config";
+
+const execAsync = promisify(exec);
 import { runAgentLoop } from "../agent/loop.js";
 import { getRepoConfig, getRepoAliases, addRepo } from "../agent/config.js";
 import { gitAutomation } from "../agent/git/git-automation.js";
-import type { GitFlowResult } from "../agent/types.js";
+import type { GitFlowResult, AgentSession } from "../agent/types.js";
 import { classifyTask } from "../agent/classifier.js";
 import { detectProject } from "../agent/project-detector.js";
 import type { ExecutionMode } from "../agent/classifier.js";
@@ -62,6 +66,44 @@ function consumePendingTask(
     if (timer) {
       clearTimeout(timer);
       pendingTaskTimers.delete(taskId);
+    }
+  }
+  return value;
+}
+
+// ── Pending MR gate (post-implementation, pre-push) ────────────────────────
+// After the agent loop completes the user is shown a "Create MR / Reject" gate
+// before any git push happens.  Same TTL + timer pattern as pendingTasks above.
+interface PendingGitTask {
+  intent: ParsedIntent;
+  filesModified: string[];
+  session: AgentSession;
+  agentSummary: string;
+  channelId: string;
+  threadTs: string;
+}
+
+const PENDING_GIT_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+const pendingGitTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const pendingGitTasks = new Map<string, PendingGitTask>();
+
+function storePendingGitTask(gitTaskId: string, value: PendingGitTask): void {
+  pendingGitTasks.set(gitTaskId, value);
+  const timer = setTimeout(() => {
+    pendingGitTasks.delete(gitTaskId);
+    pendingGitTimers.delete(gitTaskId);
+  }, PENDING_GIT_TTL_MS);
+  pendingGitTimers.set(gitTaskId, timer);
+}
+
+function consumePendingGitTask(gitTaskId: string): PendingGitTask | undefined {
+  const value = pendingGitTasks.get(gitTaskId);
+  if (value !== undefined) {
+    pendingGitTasks.delete(gitTaskId);
+    const timer = pendingGitTimers.get(gitTaskId);
+    if (timer) {
+      clearTimeout(timer);
+      pendingGitTimers.delete(gitTaskId);
     }
   }
   return value;
@@ -889,56 +931,98 @@ app.action("approve_task", async ({ body, ack, client: slackClient }: any) => {
       "implement",
     );
 
-    // Git flow: branch → commit → push → open PR/MR
-    // Priority: files the agent wrote > pre-staged files in the repo
-    let gitSection = "";
+    // Determine which files to commit:
+    // priority = files the agent wrote; fallback = pre-staged files (manual `git add`)
     const config = await getRepoConfig();
     const repoEntry = config.repos[intent.repo];
-    if (repoEntry) {
-      let filesToCommit = loopResult.filesModified;
+    let filesToCommit = loopResult.filesModified;
 
-      // If agent made no write_file calls, check for pre-staged changes
-      // (e.g. user ran `git add` manually and asked the agent to push)
-      if (filesToCommit.length === 0) {
-        const staged = await gitAutomation.getStagedFiles(repoEntry.path);
-        if (staged.length > 0) {
-          filesToCommit = staged;
-        }
-      }
-
-      if (filesToCommit.length > 0) {
-        await progressCallback("🔀 Running git flow (branch → commit → push)...");
-        try {
-          const gitResult = await gitAutomation.runFlow(
-            repoEntry,
-            loopResult.session,
-            filesToCommit,
-          );
-          gitSection = formatGitResult(gitResult);
-        } catch (gitErr) {
-          gitSection = `---\n⚠️ *Git flow error*: ${String(gitErr)}`;
-        }
-      }
+    if (repoEntry && filesToCommit.length === 0) {
+      const staged = await gitAutomation.getStagedFiles(repoEntry.path);
+      if (staged.length > 0) filesToCommit = staged;
     }
+
+    if (filesToCommit.length === 0 || !repoEntry) {
+      // Nothing was written — post completion without a git gate
+      try {
+        await slackClient.chat.postMessage({
+          channel: channelId,
+          thread_ts: threadTs,
+          text: ["✅ *Task Complete* _(no files modified)_", "", loopResult.text]
+            .filter(Boolean)
+            .join("\n"),
+          mrkdwn: true,
+        });
+      } catch (e) {
+        console.error(`[${new Date().toISOString()}] Slack postMessage error (no-op complete):`, String(e));
+      }
+      return;
+    }
+
+    // ── MR Gate: show what changed → let user decide before any push ─────────
+    const gitTaskId = randomUUID();
+    storePendingGitTask(gitTaskId, {
+      intent,
+      filesModified: filesToCommit,
+      session: loopResult.session,
+      agentSummary: loopResult.text,
+      channelId,
+      threadTs,
+    });
+
+    const fileList = filesToCommit
+      .map((f) => `• \`${f.replace(/^[^/]+\//, "")}\``) // strip repo alias prefix
+      .join("\n");
+
+    const summaryPreview =
+      loopResult.text.length > 600
+        ? loopResult.text.slice(0, 600) + "\n…"
+        : loopResult.text;
 
     try {
       await slackClient.chat.postMessage({
         channel: channelId,
         thread_ts: threadTs,
-        text: [
-          "✅ *Task Complete*",
-          "",
-          loopResult.text,
-          "",
-          gitSection,
-        ].filter(Boolean).join("\n"),
-        mrkdwn: true,
+        text: "✅ Implementation complete — review changes before pushing.",
+        blocks: [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: `✅ *Implementation complete*\n\n${summaryPreview}`,
+            },
+          },
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: `*Changed files (${filesToCommit.length}):*\n${fileList}`,
+            },
+          },
+          {
+            type: "actions",
+            block_id: `mr_gate_${gitTaskId}`,
+            elements: [
+              {
+                type: "button",
+                text: { type: "plain_text", text: "🚀 Create MR", emoji: true },
+                style: "primary",
+                action_id: "create_mr",
+                value: gitTaskId,
+              },
+              {
+                type: "button",
+                text: { type: "plain_text", text: "❌ Reject Changes", emoji: true },
+                style: "danger",
+                action_id: "reject_changes",
+                value: gitTaskId,
+              },
+            ],
+          },
+        ],
       });
     } catch (e) {
-      console.error(
-        `[${new Date().toISOString()}] Slack postMessage error (task complete):`,
-        String(e),
-      );
+      console.error(`[${new Date().toISOString()}] Slack postMessage error (MR gate):`, String(e));
     }
   } catch (err) {
     try {
@@ -1061,6 +1145,128 @@ app.action("cancel_task", async ({ body, ack, client: slackClient }: any) => {
       `[${new Date().toISOString()}] Slack postMessage error (cancel):`,
       String(e),
     );
+  }
+});
+
+// ── Button action: Create MR ───────────────────────────────────────────────
+// Triggered from the post-implementation MR gate.  Runs the full git flow:
+// branch → commit → push → open PR/MR.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+app.action("create_mr", async ({ body, ack, client: slackClient }: any) => {
+  await ack();
+  const gitTaskId = (body.actions as Array<{ value: string }>)[0]?.value;
+  const pending = consumePendingGitTask(gitTaskId);
+  if (!pending) return; // duplicate event — already handled
+
+  const { intent, filesModified, session, agentSummary, channelId, threadTs } = pending;
+
+  const progressCallback = async (update: string): Promise<void> => {
+    try {
+      await slackClient.chat.postMessage({
+        channel: channelId,
+        thread_ts: threadTs,
+        text: update,
+        mrkdwn: true,
+      });
+    } catch (e) {
+      console.error(`[${new Date().toISOString()}] Slack postMessage error (create_mr progress):`, String(e));
+    }
+  };
+
+  await progressCallback("🔀 *Creating MR* — running git flow (branch → commit → push)...");
+
+  try {
+    const config = await getRepoConfig();
+    const repoEntry = config.repos[intent.repo];
+    if (!repoEntry) throw new Error(`Repo \`${intent.repo}\` not found in config`);
+
+    const gitResult = await gitAutomation.runFlow(repoEntry, session, filesModified);
+    const gitSection = formatGitResult(gitResult);
+
+    await slackClient.chat.postMessage({
+      channel: channelId,
+      thread_ts: threadTs,
+      text: ["✅ *MR Created*", "", agentSummary, "", gitSection]
+        .filter(Boolean)
+        .join("\n"),
+      mrkdwn: true,
+    });
+  } catch (err) {
+    try {
+      await slackClient.chat.postMessage({
+        channel: channelId,
+        thread_ts: threadTs,
+        text: `❌ *Git flow error*: ${String(err)}`,
+        mrkdwn: true,
+      });
+    } catch (e) {
+      console.error(`[${new Date().toISOString()}] Slack postMessage error (create_mr error):`, String(e));
+    }
+  }
+});
+
+// ── Button action: Reject Changes ─────────────────────────────────────────
+// Discards the agent's file writes by restoring them to their HEAD state.
+// Uses `git checkout HEAD -- <files>` (non-destructive: only touches the
+// specific files the agent wrote, leaves everything else intact).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+app.action("reject_changes", async ({ body, ack, client: slackClient }: any) => {
+  await ack();
+  const gitTaskId = (body.actions as Array<{ value: string }>)[0]?.value;
+  const pending = consumePendingGitTask(gitTaskId);
+  if (!pending) return;
+
+  const { intent, filesModified, channelId, threadTs } = pending;
+
+  try {
+    const config = await getRepoConfig();
+    const repoEntry = config.repos[intent.repo];
+    if (!repoEntry) throw new Error(`Repo \`${intent.repo}\` not found`);
+
+    // Strip the "alias/" prefix to get repo-relative paths for git
+    const repoPrefix = intent.repo + "/";
+    const relativePaths = filesModified.map((f) =>
+      f.startsWith(repoPrefix) ? f.slice(repoPrefix.length) : f,
+    );
+
+    // Restore each file to its HEAD state; new files (not tracked) are deleted
+    for (const relPath of relativePaths) {
+      const fullPath = `${repoEntry.path}/${relPath}`;
+      try {
+        // Try restoring tracked file first
+        await execAsync(`git checkout HEAD -- "${relPath.replace(/"/g, '\\"')}"`, {
+          cwd: repoEntry.path,
+          timeout: 10_000,
+        });
+      } catch {
+        // File wasn't tracked (newly created by agent) — remove it
+        await fs.unlink(fullPath).catch(() => {});
+      }
+    }
+
+    const fileList = relativePaths.map((f) => `• \`${f}\``).join("\n");
+    await slackClient.chat.postMessage({
+      channel: channelId,
+      thread_ts: threadTs,
+      text: [
+        "🗑️ *Changes rejected and discarded*",
+        "",
+        `The following files have been restored to their last committed state:`,
+        fileList,
+      ].join("\n"),
+      mrkdwn: true,
+    });
+  } catch (err) {
+    try {
+      await slackClient.chat.postMessage({
+        channel: channelId,
+        thread_ts: threadTs,
+        text: `❌ *Reject failed*: ${String(err)}\nYou may need to run \`git checkout HEAD -- <files>\` manually.`,
+        mrkdwn: true,
+      });
+    } catch (e) {
+      console.error(`[${new Date().toISOString()}] Slack postMessage error (reject error):`, String(e));
+    }
   }
 });
 

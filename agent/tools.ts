@@ -183,6 +183,26 @@ export const writeToolDefinitions: ProviderTool[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'write_note',
+      description: 'Save an important finding, decision, or intermediate result to the agent scratchpad. Use this to preserve key information before the context window gets large, or to record reasoning behind complex decisions. Notes persist for the duration of the session.',
+      parameters: {
+        type: 'object',
+        properties: {
+          repo: { type: 'string', description: 'Repo alias (used to scope the note to a project)' },
+          category: {
+            type: 'string',
+            enum: ['finding', 'decision', 'plan', 'error', 'insight'],
+            description: 'finding = observed fact about code, decision = architectural choice made, plan = updated next steps, error = failure to investigate later, insight = pattern discovered',
+          },
+          note: { type: 'string', description: 'Content to save. Be concise and specific — max 800 chars.' },
+        },
+        required: ['repo', 'note'],
+      },
+    },
+  },
 ];
 // git_create_branch and git_commit are intentionally NOT in the agent tool list.
 // The system handles ALL git operations (branch, commit, push, PR/MR) automatically
@@ -365,6 +385,19 @@ export async function executeToolCall(
       const e = err as { stdout?: string; stderr?: string; message: string };
       return { success: false, error: e.message, stdout: e.stdout?.trim() ?? '', stderr: e.stderr?.trim() ?? '' };
     }
+  }
+
+  // ── write_note ────────────────────────────────────────────────────────────
+  if (toolName === 'write_note') {
+    const SCRATCH_DIR = path.resolve('data/agent-scratch');
+    const today = new Date().toISOString().slice(0, 10);
+    const scratchFile = path.join(SCRATCH_DIR, `${String(input.repo)}-${today}.md`);
+    await fs.mkdir(SCRATCH_DIR, { recursive: true });
+    const category = ((input.category as string) ?? 'note').toUpperCase();
+    const noteText = (input.note as string).slice(0, 800);
+    const entry = `\n### [${category}] ${new Date().toISOString()}\n${noteText}\n`;
+    await fs.appendFile(scratchFile, entry, 'utf-8');
+    return { success: true, message: `Note saved (${noteText.length} chars)` };
   }
 
   // ── git_create_branch ─────────────────────────────────────────────────────

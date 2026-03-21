@@ -8,6 +8,7 @@ import type { ProviderMessage, ProviderSystemBlock, ProviderTool } from './provi
 import { memoryManager } from './memory/memory-manager.js';
 import type { AgentSession, AgentLoopResult } from './types.js';
 import { detectProject } from './project-detector.js';
+import { CheckpointManager } from './checkpoint-manager.js';
 
 // Iteration budgets per execution mode
 const ITERATION_LIMITS: Record<ExecutionMode, number> = {
@@ -67,6 +68,7 @@ const TOOL_EMOJI: Record<string, string> = {
   web_search: '🌐',
   read_memory: '🧠',
   write_memory: '📝',
+  write_note: '📌',
 };
 
 export async function buildSystemPromptBlocks(
@@ -179,6 +181,75 @@ function estimateTokens(blocks: ProviderSystemBlock[]): number {
   return Math.ceil(blocks.reduce((acc, b) => acc + b.text.length, 0) / 4);
 }
 
+// ── Upgrade 2: Context compression helpers ───────────────────────────────────
+
+// Estimate token count across the running message history
+function estimateMessageTokens(messages: ProviderMessage[]): number {
+  return Math.ceil(
+    messages.reduce((acc, m) => {
+      const text =
+        typeof m.content === 'string'
+          ? m.content
+          : m.content == null
+          ? ''
+          : JSON.stringify(m.content);
+      return acc + text.length / 4;
+    }, 0)
+  );
+}
+
+// Token threshold at which we start compressing old tool results.
+// ~28K message tokens + ~10K system ≈ 38K total, safely below most provider limits.
+const CONTEXT_COMPRESS_AT = 28_000;
+// How many recent messages to leave untouched (preserve latest reasoning context)
+const KEEP_RECENT_MESSAGES = 10;
+// Tool result content longer than this gets truncated in the compressed view
+const TOOL_RESULT_TRUNCATE_AT = 1_800;
+const TOOL_RESULT_KEEP_CHARS = 600;
+
+/**
+ * Returns a version of the messages array safe to send to the provider.
+ * The original `messages` array is NOT mutated — this is a read-only view.
+ *
+ * Strategy: keep the first 2 messages (user task + planning turn) and the
+ * most recent KEEP_RECENT_MESSAGES intact.  Tool results in the middle that
+ * exceed TOOL_RESULT_TRUNCATE_AT chars have their `content` field truncated.
+ * The agent should use write_note to save anything critical before it ages
+ * into the compression zone.
+ */
+function compressOldToolResults(messages: ProviderMessage[]): ProviderMessage[] {
+  if (estimateMessageTokens(messages) < CONTEXT_COMPRESS_AT) return messages;
+
+  const pivotHead = 2; // never compress user task or planning turn
+  const pivotTail = messages.length - KEEP_RECENT_MESSAGES;
+  if (pivotTail <= pivotHead) return messages; // too few messages — nothing to compress
+
+  return messages.map((m, idx) => {
+    if (idx < pivotHead || idx >= pivotTail) return m; // keep head + tail intact
+    if (m.role !== 'tool' || typeof m.content !== 'string') return m;
+
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(m.content) as Record<string, unknown>;
+    } catch {
+      return m; // non-JSON tool result — leave as-is
+    }
+
+    const text = typeof parsed.content === 'string' ? parsed.content : null;
+    if (!text || text.length <= TOOL_RESULT_TRUNCATE_AT) return m;
+
+    return {
+      ...m,
+      content: JSON.stringify({
+        ...parsed,
+        content:
+          text.slice(0, TOOL_RESULT_KEEP_CHARS) +
+          `\n…[${text.length - TOOL_RESULT_KEEP_CHARS} chars truncated — use write_note to preserve key findings]`,
+      }),
+    };
+  });
+}
+
 // After an implement run, detect new/removed services or libs and patch AGENT_CONTEXT.md
 async function maybeUpdateAgentContext(repoAlias: string): Promise<void> {
   const config = await getRepoConfig();
@@ -261,6 +332,12 @@ export async function runAgentLoop(
   await memoryManager.recordSessionStart(session).catch(() => {});
   const filesModified: string[] = [];
 
+  // Upgrade 4: Checkpoint manager — saves loop state after each iteration
+  const checkpointManager = new CheckpointManager(session.sessionId);
+  // Upgrade 3: Reflection cadence — inject a mid-loop review every N iterations
+  const REFLECTION_INTERVAL = 4;
+  let lastReflectionIteration = 0;
+
   const systemBlocks = await buildSystemPromptBlocks(repoAlias, serviceHint, executionMode, memoryFragment, feedbackFromPreviousAttempt);
 
   // Resolve repo path for Claude CLI --add-dir (grants filesystem access)
@@ -289,6 +366,49 @@ export async function runAgentLoop(
     { role: 'user', content: userTask },
   ];
 
+  // ── Upgrade 1: Pre-loop planning step (implement mode only) ─────────────────
+  // One focused LLM call — no tools, no iteration budget consumed — that forces
+  // the model to decompose the task before touching any file.  The resulting
+  // plan is injected as the first assistant turn so every subsequent iteration
+  // can reference it.  Failure here is non-fatal: we silently continue without.
+  if (executionMode === 'implement') {
+    if (progressCallback) {
+      await progressCallback('📋 *Planning phase* — decomposing task before execution...');
+    }
+    try {
+      const planMessages: ProviderMessage[] = [
+        {
+          role: 'user',
+          content:
+            `Before writing any code, produce a concise numbered implementation plan for:\n\n${userTask}\n\n` +
+            `Your plan must cover:\n` +
+            `1. Files to READ first (understand existing patterns before changing anything)\n` +
+            `2. Files to CREATE or MODIFY — one line each explaining the specific change\n` +
+            `3. Shared libs, types, or services involved\n` +
+            `4. Risks or unknowns that need investigation\n\n` +
+            `Be concrete. Max 12 numbered items. No code — just the plan.`,
+        },
+      ];
+      const planResponse = await provider.chat(planMessages, [], {
+        maxTokens: 1024,
+        systemBlocks,
+        repoPaths,
+      });
+      if (planResponse.text.trim()) {
+        messages.push({ role: 'assistant', content: planResponse.text.trim() });
+        messages.push({ role: 'user', content: 'Good plan. Now execute it step by step using tools.' });
+        if (progressCallback) {
+          const preview = planResponse.text.trim().slice(0, 380);
+          await progressCallback(
+            `📋 *Implementation plan:*\n\`\`\`\n${preview}${planResponse.text.length > 380 ? '\n…' : ''}\n\`\`\``
+          );
+        }
+      }
+    } catch {
+      // Planning is non-fatal — continue without it
+    }
+  }
+
   let iteration = 0;
   let lastTextResponse = '';
   let webSearchCount = 0;
@@ -315,9 +435,13 @@ export async function runAgentLoop(
       await progressCallback(`🔄 Step ${iteration}/${maxIterations}...`);
     }
 
+    // Upgrade 2: Compress old tool results before sending to provider.
+    // messagesForProvider is a read-only view — messages[] is never mutated here.
+    const messagesForProvider = compressOldToolResults(messages);
+
     // Call provider with cascading fallback through all tiers on error
     const chatOptions = { maxTokens, systemBlocks, repoPaths };
-    let response = await provider.chat(messages, activeTools, chatOptions).catch(
+    let response = await provider.chat(messagesForProvider, activeTools, chatOptions).catch(
       async (err: unknown) => {
         const errMsg = String(err);
         // Retry with next tiers for transient/compatibility errors
@@ -427,6 +551,42 @@ export async function runAgentLoop(
         });
       }
 
+      // Upgrade 3: Mid-loop reflection trigger
+      // Every REFLECTION_INTERVAL iterations, inject a user message that prompts
+      // the model to reassess its plan before continuing.  The guard conditions
+      // prevent double-triggering and ensure we don't fire on the last iteration
+      // (no point reflecting when there is no budget left).
+      if (
+        executionMode === 'implement' &&
+        iteration % REFLECTION_INTERVAL === 0 &&
+        iteration > lastReflectionIteration &&
+        iteration < maxIterations - 1
+      ) {
+        lastReflectionIteration = iteration;
+        messages.push({
+          role: 'user',
+          content:
+            `[Auto-reflection — step ${iteration}/${maxIterations}] ` +
+            `Briefly review your progress before continuing:\n` +
+            `1. Which files have you modified or created so far?\n` +
+            `2. Is your original plan still accurate, or do you need to adjust it?\n` +
+            `3. What is your single most important next action?\n\n` +
+            `Answer in 2-3 sentences, then IMMEDIATELY call a tool to continue.`,
+        });
+        if (progressCallback) {
+          await progressCallback(`🔍 *Reflection checkpoint* at step ${iteration}/${maxIterations} — reviewing plan...`);
+        }
+      }
+
+      // Upgrade 4: Save checkpoint after each iteration so a crashed process can
+      // resume from the last known good state rather than restarting from scratch.
+      await checkpointManager.save({
+        iteration,
+        messages,
+        filesModified: [...filesModified],
+        webSearchCount,
+      }).catch(() => {}); // non-fatal — never block execution for checkpoint I/O
+
       continue;
     }
 
@@ -449,6 +609,12 @@ export async function runAgentLoop(
   session.providerUsed = provider.providerName;
   const sessionOutcome: AgentSession['outcome'] = lastTextResponse ? 'success' : 'failed';
   await memoryManager.recordSessionEnd(session, sessionOutcome).catch(() => {});
+
+  // Upgrade 4: Remove checkpoint file on success — it served its purpose.
+  // On failure we leave it in place so it can be inspected or replayed.
+  if (sessionOutcome === 'success') {
+    await checkpointManager.cleanup().catch(() => {});
+  }
 
   // Auto-update AGENT_CONTEXT.md if new services/libs were added (breaking structural change)
   if (executionMode === 'implement' && filesModified.length > 0) {
