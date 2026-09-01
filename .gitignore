@@ -1,7 +1,11 @@
 node_modules/
 dist/
 .env
+.env.*
 .env.local
+.env.example
+*.pem
+*.key
 
 # User-specific repo registry — generated at runtime by /add-dir or register commands
 # Copy agent/repos.config.example.json to agent/repos.config.json and fill in your paths

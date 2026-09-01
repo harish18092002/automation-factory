@@ -62,8 +62,7 @@ register project myapp at /Users/me/code/myapp
 
 ```bash
 npm install
-cp .env.example .env
-# Fill in your .env values
+# Secrets come from your shell env (~/.zshrc) — no .env file. See Setup below.
 npm run dev        # development (tsx watch)
 npm start          # production
 ```
@@ -728,7 +727,6 @@ automation/
 │
 ├── agent/repos.config.json         Auto-maintained repo registry (created on first /add-dir)
 ├── .cspell.json                    Spell-checker config (technical terms)
-├── .env.example                    Environment variable documentation
 ├── package.json
 └── tsconfig.json
 ```
@@ -917,8 +915,8 @@ Total time: ~2–4 minutes depending on codebase size and provider speed.
 | Issue                                   | Cause                                         | Fix                                                            |
 | --------------------------------------- | --------------------------------------------- | -------------------------------------------------------------- |
 | "Could not determine the target repo"   | No repo alias found in message                | Mention the alias explicitly: "in services, ..."               |
-| "Agent error: 404 status code"          | Wrong Gemini model name                       | Set `GEMINI_MODEL=gemini-2.0-flash` in `.env`                  |
-| "Reached max turns (1)"                 | Claude CLI in non-personal mode               | Make sure `IS_OPEN_SOURCE_MODE` is set correctly in `.env`     |
+| "Agent error: 404 status code"          | Wrong Gemini model name                       | Set `GEMINI_MODEL=gemini-2.0-flash` in `~/.zshrc`                  |
+| "Reached max turns (1)"                 | Claude CLI in non-personal mode               | Make sure `IS_OPEN_SOURCE_MODE` is exported in `~/.zshrc`     |
 | Infinite read loop                      | Model re-reading same files                   | Fixed via dedup set — same file returns cached hint            |
 | 99 Slack messages                       | Old: every read posted individually           | Fixed via batching — reads grouped per 5                       |
 | Plan buttons stop working after restart | Pending tasks stored in-memory                | Re-send your message to create a new plan                      |

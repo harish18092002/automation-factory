@@ -42,28 +42,26 @@ Supports multi-provider LLM routing (DeepSeek, Gemini, Groq, Claude CLI).
 
 ## Step 2 — Configure Environment
 
+Secrets are read from your shell environment — this project does **not** use a
+`.env` file. Add the exports to `~/.zshrc` (never commit them):
+
 ```bash
-cd /path/to/automation-factories
-cp .env.example .env
-```
-
-Edit `.env` with your keys:
-
-```env
+# ── automation-factories ──────────────────────────────────────────────
 # Slack (required)
-SLACK_BOT_TOKEN=xoxb-...
-SLACK_APP_TOKEN=xapp-...
+export SLACK_BOT_TOKEN="xoxb-..."
+export SLACK_APP_TOKEN="xapp-..."
 
-# LLM providers — set IS_OPEN_SOURCE_MODE=yes to use these, or leave unset to use Claude CLI only
-IS_OPEN_SOURCE_MODE=yes
-ANTHROPIC_API_KEY=sk-ant-...
-DEEPSEEK_API_KEY=sk-...
-GROQ_API_KEY=gsk_...
-GEMINI_API_KEY=AIza...
+# LLM providers — set IS_OPEN_SOURCE_MODE=yes to use these, or "no" for Claude CLI only
+export IS_OPEN_SOURCE_MODE="yes"
+export DEEPSEEK_API_KEY="sk-..."
+export GROQ_API_KEY="gsk_..."
+export GEMINI_API_KEY="AIza..."
 
 # Optional: web search for research tasks
-TAVILY_API_KEY=tvly-...
+export TAVILY_API_KEY="tvly-..."
 ```
+
+Then reload: `source ~/.zshrc`
 
 If `IS_OPEN_SOURCE_MODE=no` (or unset), the bot routes all tasks through Claude CLI (your local
 Claude Code installation). No API keys required — uses your Claude subscription.
@@ -187,7 +185,6 @@ automation-factories/
 │   ├── episodic/                  # Session logs (JSONL)
 │   ├── semantic/                  # Learned facts per repo (JSON)
 │   └── skills/                    # Learned patterns per repo (JSON)
-├── .env.example                   # Environment variable template
 ├── package.json
 └── tsconfig.json
 ```

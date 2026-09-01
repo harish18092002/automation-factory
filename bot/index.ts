@@ -5,7 +5,6 @@ import fs from "fs/promises";
 import { exec } from "child_process";
 import { promisify } from "util";
 import { randomUUID } from "crypto";
-import "dotenv/config";
 
 const execAsync = promisify(exec);
 import { runAgentLoop } from "../agent/loop.js";
