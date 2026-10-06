@@ -1,9 +1,23 @@
 import fs from "fs/promises";
+import { existsSync } from "fs";
 import path from "path";
 
-// In NodeNext/CommonJS mode (no "type":"module" in package.json),
-// __dirname is available as a native CJS global — no import needed.
-export const CONFIG_PATH = path.join(__dirname, "repos.config.json");
+// repos.config.json lives in the source agent/ dir and is never emitted to
+// dist/, so a plain __dirname join breaks under the compiled build (dist/agent/
+// resolves to a file that doesn't exist and the registry reads as empty).
+// Anchor to the project root — the nearest package.json above __dirname —
+// which is the same directory whether we run from agent/ or dist/agent/.
+function projectRoot(): string {
+  let dir = __dirname;
+  while (!existsSync(path.join(dir, "package.json"))) {
+    const parent = path.dirname(dir);
+    if (parent === dir) return __dirname;
+    dir = parent;
+  }
+  return dir;
+}
+
+export const CONFIG_PATH = path.join(projectRoot(), "agent", "repos.config.json");
 
 export interface RepoEntry {
   path: string;
